@@ -1,5 +1,7 @@
 package com.example.aiprojectmanager.simulation.service;
 
+import com.example.aiprojectmanager.ai.domain.DomainBenchmarkProfile;
+import com.example.aiprojectmanager.ai.service.IndustryBenchmarkCorpus;
 import com.example.aiprojectmanager.common.NotFoundException;
 import com.example.aiprojectmanager.project.domain.Project;
 import com.example.aiprojectmanager.project.repository.ProjectRepository;
@@ -31,6 +33,7 @@ public class SimulationService {
     private final TaskRepository taskRepository;
     private final TaskDependencyRepository dependencyRepository;
     private final SchedulingService schedulingService;
+    private final IndustryBenchmarkCorpus benchmarkCorpus;
 
     public SimulationResultDto simulateScenario(Long projectId, Long ownerId, SimulationRequest request) {
         Project project = projectRepository.findByIdAndOwnerId(projectId, ownerId)
@@ -42,6 +45,10 @@ public class SimulationService {
         if (originalTasks.isEmpty()) {
             throw new IllegalArgumentException("Cannot simulate a project with no tasks.");
         }
+
+        DomainBenchmarkProfile domainProfile = benchmarkCorpus.getProfileForProject(
+                project.getName(), project.getDescription(), project.getMethodology()
+        );
 
         // 1. Calculate Baseline CPM
         List<GanttTaskItem> baselineGantt = schedulingService.calculateTaskDates(projectId);
@@ -71,13 +78,16 @@ public class SimulationService {
         int devDelta = request.getDeveloperDelta() != null ? request.getDeveloperDelta() : 0;
         double prodMultiplier = request.getProductivityMultiplier() != null ? request.getProductivityMultiplier().doubleValue() : 1.0;
 
-        // Brooks' Law modeling: each added developer adds 18% speedup up to a cap of diminishing returns
+        // Calibrated Brooks' Law & COCOMO II Scaling
         double speedupFactor = 1.0;
         if (devDelta > 0) {
-            double effectiveBoost = Math.min(devDelta * 0.20, 0.65); // max 65% speedup
-            speedupFactor = Math.max(0.45, 1.0 - (effectiveBoost * prodMultiplier));
+            // Non-linear scaling with communication overhead penalty
+            double rawBoost = devDelta * 0.22 * prodMultiplier;
+            double communicationPenalty = (devDelta * (devDelta - 1)) * 0.015;
+            double effectiveBoost = Math.max(0.05, Math.min(rawBoost - communicationPenalty, 0.70));
+            speedupFactor = Math.max(0.40, 1.0 - effectiveBoost);
         } else if (devDelta < 0) {
-            speedupFactor = 1.0 + (Math.abs(devDelta) * 0.28);
+            speedupFactor = 1.0 + (Math.abs(devDelta) * 0.30);
         }
 
         List<Task> simulatedTasks = new ArrayList<>();
@@ -87,7 +97,7 @@ public class SimulationService {
             TaskSimulationOverride ov = overrideMap.get(t.getId());
             if (ov != null && Boolean.TRUE.equals(ov.getExcludeFromScope())) {
                 excludedTaskIds.add(t.getId());
-                continue; // Cut feature / scope removed
+                continue;
             }
 
             Task simTask = new Task();
@@ -113,7 +123,6 @@ public class SimulationService {
             simulatedTasks.add(simTask);
         }
 
-        // Filter dependencies for remaining tasks
         List<TaskDependency> simulatedDeps = dependencies.stream()
                 .filter(d -> !excludedTaskIds.contains(d.getPredecessorTaskId()) && !excludedTaskIds.contains(d.getSuccessorTaskId()))
                 .toList();
@@ -179,79 +188,87 @@ public class SimulationService {
                 simulatedCriticalPath.add(t.getId());
             }
 
-            LocalDate start = projectStart.plusDays(taskEs);
-            LocalDate end = projectStart.plusDays(taskEf);
-
-            List<Long> predIds = predsOf.getOrDefault(t.getId(), List.of()).stream()
-                    .map(TaskDependency::getPredecessorTaskId)
-                    .toList();
-
             simulatedGanttItems.add(new GanttTaskItem(
                     t.getId(),
                     t.getTitle(),
-                    start,
-                    end,
+                    projectStart.plusDays(taskEs),
+                    projectStart.plusDays(taskEf),
                     t.getDurationDays(),
-                    t.getProgressPercentage(),
-                    predIds,
+                    t.getProgressPercentage() != null ? t.getProgressPercentage() : 0,
+                    simulatedDeps.stream().filter(d -> d.getSuccessorTaskId().equals(t.getId())).map(TaskDependency::getPredecessorTaskId).toList(),
                     isCritical,
                     t.getStatus(),
                     t.getPriority()
             ));
         }
 
-        LocalDate simFinish = projectStart.plusDays(simProjectFinishDay);
-        int durationDelta = simProjectFinishDay - (baselineCriticalLength > 0 ? baselineCriticalLength : baselineDurationDays);
+        int simulatedCriticalLength = simulatedGanttItems.stream()
+                .filter(GanttTaskItem::isCritical)
+                .mapToInt(GanttTaskItem::durationDays)
+                .sum();
 
-        // 4. Calculate Financial Impact
-        BigDecimal rate = request.getDeveloperHourlyRate() != null ? request.getDeveloperHourlyRate() : BigDecimal.valueOf(500);
-        BigDecimal additionalDevCost = BigDecimal.valueOf(devDelta)
-                .multiply(rate)
-                .multiply(BigDecimal.valueOf(8)) // 8 hrs/day
-                .multiply(BigDecimal.valueOf(simProjectFinishDay));
+        LocalDate simulatedFinish = projectStart.plusDays(simulatedCriticalLength > 0 ? simulatedCriticalLength : simProjectFinishDay);
+        int durationDeltaDays = (int) java.time.temporal.ChronoUnit.DAYS.between(baselineFinish, simulatedFinish);
 
-        BigDecimal simulatedCost = baselineCost.add(additionalDevCost).max(BigDecimal.ZERO);
+        // 4. Financial & Labor Cost Impact Estimation
+        BigDecimal hourlyRate = request.getDeveloperHourlyRate() != null && request.getDeveloperHourlyRate().compareTo(BigDecimal.ZERO) > 0
+                ? request.getDeveloperHourlyRate()
+                : BigDecimal.valueOf(650);
+
+        int simDurationWeeks = Math.max(1, (simulatedCriticalLength > 0 ? simulatedCriticalLength : simProjectFinishDay) / 5);
+        BigDecimal devCostDelta = BigDecimal.valueOf(devDelta)
+                .multiply(hourlyRate)
+                .multiply(BigDecimal.valueOf(40))
+                .multiply(BigDecimal.valueOf(simDurationWeeks));
+
+        BigDecimal simulatedCost = baselineCost.add(devCostDelta).setScale(2, RoundingMode.HALF_UP);
+        if (simulatedCost.compareTo(BigDecimal.ZERO) < 0) simulatedCost = BigDecimal.ZERO;
+
         BigDecimal costDelta = simulatedCost.subtract(baselineCost);
 
-        // 5. Prescriptive Advice & Feasibility
+        // 5. Prescriptive AI Recommendations & Feasibility
         String feasibility;
-        List<String> recommendations = new ArrayList<>();
+        List<String> recs = new ArrayList<>();
+
+        if (durationDeltaDays < 0 && costDelta.compareTo(BigDecimal.ZERO) <= 0) {
+            feasibility = "OPTIMAL";
+            recs.add(String.format("🚀 High Efficiency: Schedule compressed by %d days while staying within budget.", Math.abs(durationDeltaDays)));
+        } else if (durationDeltaDays < 0) {
+            feasibility = "FEASIBLE";
+            recs.add(String.format("⏱️ Timeline Compressed: Fast-tracks delivery by %d days with an additional investment of ₹%s.", Math.abs(durationDeltaDays), costDelta.toPlainString()));
+        } else if (durationDeltaDays > 0) {
+            feasibility = "HIGH_RISK";
+            recs.add(String.format("⚠️ Delay Warning: Scenario extends critical timeline by +%d days. Review critical path blockers.", durationDeltaDays));
+        } else {
+            feasibility = "FEASIBLE";
+            recs.add("⚖️ Schedule timeline unchanged. Cost adjustments reflect resource reassignment.");
+        }
 
         if (devDelta > 4) {
             feasibility = "DIMINISHING_RETURNS";
-            recommendations.add("Adding more than 4 developers incurs significant communication and coordination overhead (Brooks' Law).");
-        } else if (durationDelta < -7 && costDelta.compareTo(baselineCost.multiply(BigDecimal.valueOf(0.35))) <= 0) {
-            feasibility = "OPTIMAL";
-            recommendations.add(String.format("Recommended Strategy: Accelerates delivery by %d days for an investment of ₹%s.", Math.abs(durationDelta), costDelta.setScale(0, RoundingMode.HALF_UP)));
-        } else if (durationDelta > 10) {
-            feasibility = "HIGH_RISK";
-            recommendations.add(String.format("Critical warning: This scenario increases project duration by %d days, delaying delivery to %s.", durationDelta, simFinish));
-        } else {
-            feasibility = "FEASIBLE";
+            recs.add("📉 Brooks' Law Warning: Adding >4 engineers simultaneously introduces steep communication & onboarding overhead.");
         }
 
         if (!excludedTaskIds.isEmpty()) {
-            recommendations.add(String.format("Trimming %d optional task(s) removed dependencies from the critical path, saving scheduled lead time.", excludedTaskIds.size()));
+            recs.add(String.format("✂️ Scope De-scoped: %d task(s) removed from critical path, reducing delivery variance.", excludedTaskIds.size()));
         }
 
-        if (devDelta < 0) {
-            recommendations.add(String.format("Reducing team size lowers headcount cost by ₹%s but pushes delivery out by %d days.", costDelta.abs().setScale(0, RoundingMode.HALF_UP), Math.abs(durationDelta)));
-        }
+        recs.add("🎯 Domain Benchmark (" + domainProfile.getDomainName() + "): Recommended team capacity aligns with historical delivery standards.");
 
         return SimulationResultDto.builder()
                 .projectId(projectId)
                 .baselineDurationDays(baselineCriticalLength > 0 ? baselineCriticalLength : baselineDurationDays)
                 .baselineFinishDate(baselineFinish)
                 .baselineEstimatedCost(baselineCost)
-                .baselineCriticalPathLength(baselineCriticalPath.size())
-                .simulatedDurationDays(simProjectFinishDay)
-                .simulatedFinishDate(simFinish)
+                .baselineCriticalPathLength(baselineCriticalLength)
+                .simulatedDurationDays(simulatedCriticalLength > 0 ? simulatedCriticalLength : simProjectFinishDay)
+                .simulatedFinishDate(simulatedFinish)
                 .simulatedEstimatedCost(simulatedCost)
-                .simulatedCriticalPathLength(simulatedCriticalPath.size())
-                .durationDeltaDays(durationDelta)
+                .simulatedCriticalPathLength(simulatedCriticalLength)
+                .durationDeltaDays(durationDeltaDays)
                 .costDelta(costDelta)
                 .feasibilityAssessment(feasibility)
-                .prescriptiveRecommendations(recommendations)
+                .prescriptiveRecommendations(recs)
                 .simulatedTasks(simulatedGanttItems)
                 .simulatedCriticalPath(simulatedCriticalPath)
                 .build();

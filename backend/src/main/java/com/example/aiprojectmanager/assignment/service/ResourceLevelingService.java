@@ -13,7 +13,9 @@ import com.example.aiprojectmanager.task.domain.Task;
 import com.example.aiprojectmanager.task.domain.TaskStatus;
 import com.example.aiprojectmanager.task.repository.TaskRepository;
 import com.example.aiprojectmanager.team.domain.TeamMember;
+import com.example.aiprojectmanager.team.domain.TeamMemberSkill;
 import com.example.aiprojectmanager.team.repository.TeamMemberRepository;
+import com.example.aiprojectmanager.team.repository.TeamMemberSkillRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,6 +31,7 @@ public class ResourceLevelingService {
 
     private final ProjectRepository projectRepository;
     private final TeamMemberRepository teamMemberRepository;
+    private final TeamMemberSkillRepository teamMemberSkillRepository;
     private final TaskAssignmentRepository taskAssignmentRepository;
     private final TaskRepository taskRepository;
     private final SchedulingService schedulingService;
@@ -83,72 +86,96 @@ public class ResourceLevelingService {
 
             if (pct.compareTo(BigDecimal.valueOf(100.0)) > 0) {
                 overloadedMembers.add(m);
-            } else if (pct.compareTo(BigDecimal.valueOf(70.0)) < 0) {
+            } else if (pct.compareTo(BigDecimal.valueOf(75.0)) < 0) {
                 availableMembers.add(m);
             }
         }
 
-        // 2. Generate prescriptive leveling recommendations
+        // 2. Generate prescriptive leveling recommendations using Skill & Capacity Score
         List<LevelingRecommendationDto> recommendations = new ArrayList<>();
 
-        // Sort available members by lowest load
-        availableMembers.sort(Comparator.comparing(m -> memberWorkloadPct.getOrDefault(m.getId(), BigDecimal.ZERO)));
+        // Fetch skills for all members
+        Map<Long, List<TeamMemberSkill>> memberSkills = new HashMap<>();
+        for (TeamMember m : members) {
+            memberSkills.put(m.getId(), teamMemberSkillRepository.findByTeamMemberId(m.getId()));
+        }
 
         for (TeamMember overloaded : overloadedMembers) {
             List<TaskAssignment> overAssigned = memberAssignments.getOrDefault(overloaded.getId(), List.of());
 
-            // Prioritize reallocating non-critical tasks first, or tasks in TODO status
+            // Prioritize non-critical tasks first to avoid extending deadline
             List<TaskAssignment> candidateAssignments = overAssigned.stream()
                     .filter(a -> a.getTask().getStatus() != TaskStatus.DONE)
-                    .sorted(Comparator.comparing(a -> criticalTaskIds.contains(a.getTask().getId()))) // false (non-critical) first
+                    .sorted(Comparator.comparing(a -> criticalTaskIds.contains(a.getTask().getId())))
                     .toList();
 
             for (TaskAssignment candidate : candidateAssignments) {
                 if (availableMembers.isEmpty()) break;
 
-                // Pick the best available candidate (matching role if possible)
-                TeamMember target = availableMembers.stream()
-                        .filter(m -> m.getRole() != null && overloaded.getRole() != null && m.getRole().equalsIgnoreCase(overloaded.getRole()))
-                        .findFirst()
+                Task task = candidate.getTask();
+                String taskKeywords = (task.getTitle() + " " + (task.getDescription() != null ? task.getDescription() : "")).toLowerCase();
+
+                // Score each available candidate based on: 1. Role match, 2. Skill keywords, 3. Remaining Capacity
+                TeamMember bestTarget = availableMembers.stream()
+                        .max(Comparator.comparingDouble(target -> {
+                            double score = 0.0;
+                            // 1. Role match
+                            if (target.getRole() != null && overloaded.getRole() != null && target.getRole().equalsIgnoreCase(overloaded.getRole())) {
+                                score += 40.0;
+                            }
+                            // 2. Skill match
+                            List<TeamMemberSkill> skills = memberSkills.getOrDefault(target.getId(), List.of());
+                            for (TeamMemberSkill s : skills) {
+                                if (s.getSkill() != null && taskKeywords.contains(s.getSkill().getName().toLowerCase())) {
+                                    score += 30.0;
+                                }
+                            }
+                            // 3. Lowest utilization gets priority
+                            double currentLoad = memberWorkloadPct.getOrDefault(target.getId(), BigDecimal.ZERO).doubleValue();
+                            score += Math.max(0.0, (100.0 - currentLoad) * 0.3);
+                            return score;
+                        }))
                         .orElse(availableMembers.get(0));
 
                 BigDecimal taskHours = candidate.getPlannedHours() != null ? candidate.getPlannedHours() : BigDecimal.valueOf(10);
-                boolean isNonCritical = !criticalTaskIds.contains(candidate.getTask().getId());
+                boolean isNonCritical = !criticalTaskIds.contains(task.getId());
 
                 String rationale = String.format(
-                        "Reassign '%s' from %s (%s%% capacity) to %s (%s%% capacity) to eliminate bottleneck%s.",
-                        candidate.getTask().getTitle(),
+                        "Reassign '%s' from %s (%s%% utilization) to %s (%s%% utilization) based on skill matching & capacity%s.",
+                        task.getTitle(),
                         overloaded.getName(),
                         memberWorkloadPct.get(overloaded.getId()),
-                        target.getName(),
-                        memberWorkloadPct.get(target.getId()),
-                        isNonCritical ? " without affecting the project critical path" : ""
+                        bestTarget.getName(),
+                        memberWorkloadPct.get(bestTarget.getId()),
+                        isNonCritical ? " without shifting the critical path" : ""
                 );
 
                 recommendations.add(LevelingRecommendationDto.builder()
-                        .taskId(candidate.getTask().getId())
-                        .taskTitle(candidate.getTask().getTitle())
-                        .taskDurationDays(candidate.getTask().getDurationDays())
+                        .taskId(task.getId())
+                        .taskTitle(task.getTitle())
+                        .taskDurationDays(task.getDurationDays())
                         .plannedHours(taskHours)
                         .sourceMemberId(overloaded.getId())
                         .sourceMemberName(overloaded.getName())
                         .sourceCurrentWorkloadPct(memberWorkloadPct.get(overloaded.getId()))
-                        .targetMemberId(target.getId())
-                        .targetMemberName(target.getName())
-                        .targetCurrentWorkloadPct(memberWorkloadPct.get(target.getId()))
+                        .targetMemberId(bestTarget.getId())
+                        .targetMemberName(bestTarget.getName())
+                        .targetCurrentWorkloadPct(memberWorkloadPct.get(bestTarget.getId()))
                         .rationale(rationale)
                         .build());
 
-                // Simulated update to avoid over-assigning target in suggestions
-                BigDecimal targetCap = target.getAvailabilityHoursPerWeek() != null ? target.getAvailabilityHoursPerWeek().multiply(BigDecimal.valueOf(4)) : BigDecimal.valueOf(160);
-                BigDecimal newTargetLoad = memberPlannedHours.get(target.getId()).add(taskHours)
+                // Update target's simulated workload
+                BigDecimal targetCap = bestTarget.getAvailabilityHoursPerWeek() != null
+                        ? bestTarget.getAvailabilityHoursPerWeek().multiply(BigDecimal.valueOf(4))
+                        : BigDecimal.valueOf(160);
+                BigDecimal newTargetLoad = memberPlannedHours.get(bestTarget.getId()).add(taskHours)
                         .divide(targetCap, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100)).setScale(1, RoundingMode.HALF_UP);
-                memberWorkloadPct.put(target.getId(), newTargetLoad);
+                memberWorkloadPct.put(bestTarget.getId(), newTargetLoad);
 
                 if (newTargetLoad.compareTo(BigDecimal.valueOf(80.0)) >= 0) {
-                    availableMembers.remove(target);
+                    availableMembers.remove(bestTarget);
                 }
-                break; // 1-2 key suggestions per overloaded member
+                break; // Level 1-2 major tasks per overloaded member per cycle
             }
         }
 
