@@ -5,6 +5,8 @@ import com.example.aiprojectmanager.scheduling.dto.*;
 import com.example.aiprojectmanager.scheduling.repository.TaskDependencyRepository;
 import com.example.aiprojectmanager.task.domain.Task;
 import com.example.aiprojectmanager.task.domain.DependencyType;
+import com.example.aiprojectmanager.task.domain.TaskStatus;
+import com.example.aiprojectmanager.task.domain.TaskPriority;
 import com.example.aiprojectmanager.task.repository.TaskRepository;
 import com.example.aiprojectmanager.project.domain.Project;
 import com.example.aiprojectmanager.project.repository.ProjectRepository;
