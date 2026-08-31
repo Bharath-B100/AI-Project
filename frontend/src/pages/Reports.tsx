@@ -95,7 +95,11 @@ function escapeCSV(val: unknown): string {
   return str;
 }
 
-function exportSummaryCSV(reports: ProjectReport[]) {
+function exportSummaryCSV(reports: ProjectReport[], onError?: (msg: string) => void) {
+  if (reports.length === 0) {
+    if (onError) onError('No projects found to export.');
+    return;
+  }
   const headers = [
     'Project ID',
     'Project Name',
@@ -191,7 +195,7 @@ function exportSummaryCSV(reports: ProjectReport[]) {
   URL.revokeObjectURL(url);
 }
 
-function exportDetailedTasksCSV(reports: ProjectReport[]) {
+function exportDetailedTasksCSV(reports: ProjectReport[], onError?: (msg: string) => void) {
   const headers = [
     'Project ID',
     'Project Name',
@@ -232,7 +236,7 @@ function exportDetailedTasksCSV(reports: ProjectReport[]) {
   });
 
   if (rows.length === 0) {
-    alert('No tasks found across projects to export.');
+    if (onError) onError('No tasks found across projects to export.');
     return;
   }
 
@@ -316,12 +320,14 @@ function ProjectReportCard({
   onRefreshCosts,
   onRunRiskAnalysis,
   onUpdateRiskStatus,
+  onOpenWeeklyReport,
 }: {
   report: ProjectReport;
   isAnalysing: boolean;
   onRefreshCosts: (projectId: number) => void;
   onRunRiskAnalysis: (projectId: number) => void;
   onUpdateRiskStatus: (projectId: number, riskId: number, status: string) => void;
+  onOpenWeeklyReport: (projectId: number) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const { project, tasks, health, budget, workload, risks, costs } = report;
@@ -581,7 +587,14 @@ function ProjectReportCard({
           </div>
 
           {/* Open project link & Export Single Project CSV */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 14, paddingTop: 6 }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10, paddingTop: 6, flexWrap: 'wrap' }}>
+            <button
+              onClick={(e) => { e.stopPropagation(); onOpenWeeklyReport(project.id); }}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.78rem', fontWeight: 700, color: '#7c3aed', background: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: 'var(--radius-xs)', padding: '5px 10px', cursor: 'pointer' }}
+              title="Generate AI Executive Report for this project"
+            >
+              <Zap size={12} /> AI Weekly Report
+            </button>
             <button
               onClick={(e) => { e.stopPropagation(); exportSummaryCSV([report]); }}
               style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.78rem', fontWeight: 600, color: '#059669', background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 'var(--radius-xs)', padding: '5px 10px', cursor: 'pointer' }}
@@ -706,6 +719,18 @@ export default function Reports() {
     }
   }, [reports, load]);
 
+  // ── open weekly report for specific project ────────────────
+  const openWeeklyReport = useCallback(async (projectId: number) => {
+    try {
+      const report = await reportApi.getWeekly(projectId);
+      setWeeklyReport(report);
+      setShowWeeklyReport(true);
+    } catch {
+      setToastMessage('Failed to generate weekly report for this project.');
+      setTimeout(() => setToastMessage(null), 4000);
+    }
+  }, []);
+
   // ── update risk status inline ─────────────────────────────
   const handleUpdateRiskStatus = useCallback(async (projectId: number, riskId: number, newStatus: string) => {
     try {
@@ -782,25 +807,32 @@ export default function Reports() {
             <Zap size={14} className={analysingAll ? 'spin' : ''} />
             {analysingAll ? 'Analyzing Portfolio AI Risks…' : '⚡ Run AI Risk Analysis'}
           </button>
-          <button onClick={() => exportSummaryCSV(filtered)}
+          <button onClick={() => exportSummaryCSV(filtered, (msg) => { setToastMessage(msg); setTimeout(() => setToastMessage(null), 3500); })}
             style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', background: '#ecfdf5', border: '1px solid #6ee7b7', borderRadius: 'var(--radius-sm)', color: '#059669', fontSize: '0.83rem', fontWeight: 600, cursor: 'pointer' }}>
             <Download size={13} /> Export Summary CSV
           </button>
-          <button onClick={() => exportDetailedTasksCSV(filtered)}
+          <button onClick={() => exportDetailedTasksCSV(filtered, (msg) => { setToastMessage(msg); setTimeout(() => setToastMessage(null), 3500); })}
             style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', background: 'var(--bg-secondary)', border: '1px solid var(--border-medium)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: '0.83rem', fontWeight: 600, cursor: 'pointer' }}>
             <Download size={13} /> Export Tasks CSV
           </button>
           <button
             onClick={() => {
-              if (reports.length === 0) return;
-              const firstActiveProject = reports.find(r => r.project.status === 'ACTIVE') || reports[0];
-              reportApi.getWeekly(firstActiveProject.project.id).then(report => {
+              if (reports.length === 0) {
+                setToastMessage('No projects found to generate report.');
+                setTimeout(() => setToastMessage(null), 3000);
+                return;
+              }
+              const targetProject = reports.find(r => r.project.status === 'ACTIVE' && r.tasks.length > 0) || reports.find(r => r.tasks.length > 0) || reports[0];
+              reportApi.getWeekly(targetProject.project.id).then(report => {
                 setWeeklyReport(report);
                 setShowWeeklyReport(true);
-              }).catch(() => alert('Failed to generate weekly report. Ensure project has tasks.'));
+              }).catch(() => {
+                setToastMessage('Failed to generate weekly report. Ensure project has tasks.');
+                setTimeout(() => setToastMessage(null), 4000);
+              });
             }}
             style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', background: 'linear-gradient(135deg,#7c3aed,#a855f7)', border: 'none', borderRadius: 'var(--radius-sm)', color: '#fff', fontSize: '0.83rem', fontWeight: 700, cursor: 'pointer', boxShadow: '0 2px 8px rgba(124,58,237,0.3)' }}
-            title="Generate AI Executive Status Report for your most active project"
+            title="Generate AI Executive Status Report for your project"
           >
             <Zap size={13} /> AI Weekly Report
           </button>
@@ -897,6 +929,7 @@ export default function Reports() {
               onRefreshCosts={refreshCosts}
               onRunRiskAnalysis={runRiskAnalysis}
               onUpdateRiskStatus={handleUpdateRiskStatus}
+              onOpenWeeklyReport={openWeeklyReport}
             />
           ))}
         </div>
@@ -934,7 +967,22 @@ export default function Reports() {
               background: weeklyReport.overallStatusColor === 'RED' ? 'linear-gradient(135deg,#dc2626,#ef4444)' : weeklyReport.overallStatusColor === 'AMBER' ? 'linear-gradient(135deg,#d97706,#f59e0b)' : 'linear-gradient(135deg,#059669,#10b981)', borderRadius: '14px 14px 0 0' }}>
               <div>
                 <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: '0.72rem', fontWeight: 700, letterSpacing: 1 }}>AI EXECUTIVE WEEKLY REPORT</div>
-                <h3 style={{ color: '#fff', fontSize: '1.25rem', fontWeight: 800, margin: '4px 0 0' }}>{weeklyReport.projectName}</h3>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4 }}>
+                  <h3 style={{ color: '#fff', fontSize: '1.25rem', fontWeight: 800, margin: 0 }}>{weeklyReport.projectName}</h3>
+                  {reports.length > 1 && (
+                    <select
+                      value={weeklyReport.projectId}
+                      onChange={(e) => openWeeklyReport(Number(e.target.value))}
+                      style={{ background: 'rgba(255,255,255,0.25)', border: '1px solid rgba(255,255,255,0.4)', borderRadius: 6, color: '#fff', padding: '3px 8px', fontSize: '0.76rem', fontWeight: 700, outline: 'none', cursor: 'pointer' }}
+                    >
+                      {reports.map(r => (
+                        <option key={r.project.id} value={r.project.id} style={{ color: '#1e293b' }}>
+                          Switch: {r.project.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
                 <div style={{ color: 'rgba(255,255,255,0.75)', fontSize: '0.78rem', marginTop: 2 }}>{weeklyReport.methodology} · {weeklyReport.reportDate}</div>
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
