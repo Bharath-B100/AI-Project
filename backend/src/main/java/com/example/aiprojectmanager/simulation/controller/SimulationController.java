@@ -12,6 +12,8 @@ import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Map;
+
 @RestController
 @RequestMapping("/projects/{projectId}/simulate")
 @RequiredArgsConstructor
@@ -28,7 +30,7 @@ public class SimulationController {
 
     /**
      * POST /api/v1/projects/{projectId}/simulate
-     * Runs an in-memory CPM What-If scenario simulation with developer delta, productivity multiplier, and task duration overrides.
+     * Runs an in-memory CPM What-If scenario simulation with developer delta, productivity multiplier, and task overrides.
      */
     @PostMapping
     public ResponseEntity<SimulationResultDto> simulate(
@@ -39,5 +41,20 @@ public class SimulationController {
         SimulationRequest req = request != null ? request : new SimulationRequest();
         SimulationResultDto result = simulationService.simulateScenario(projectId, ownerId, req);
         return ResponseEntity.ok(result);
+    }
+
+    /**
+     * POST /api/v1/projects/{projectId}/simulate/apply
+     * Persists the simulated scenario duration adjustments directly to project tasks.
+     */
+    @PostMapping("/apply")
+    public ResponseEntity<Map<String, Object>> applySimulation(
+            @PathVariable Long projectId,
+            Authentication auth,
+            @Valid @RequestBody(required = false) SimulationRequest request) {
+        Long ownerId = getUserId(auth);
+        SimulationRequest req = request != null ? request : new SimulationRequest();
+        Map<String, Object> response = simulationService.applySimulationScenario(projectId, ownerId, req);
+        return ResponseEntity.ok(response);
     }
 }

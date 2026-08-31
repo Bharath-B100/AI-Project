@@ -451,8 +451,12 @@ export interface SimulationResult {
 }
 
 export const simulationApi = {
-  simulate: (projectId: number, req: SimulationRequest) =>
-    api.post<SimulationResult>(`/projects/${projectId}/simulate`, req).then(r => r.data),
+  simulate: (projectId: number, req?: SimulationRequest) =>
+    api.post<SimulationResult>(`/projects/${projectId}/simulate`, req || {}).then(r => r.data),
+  apply: (projectId: number, req?: SimulationRequest) =>
+    api.post<{ applied: boolean; updatedTasksCount: number; newDurationDays: number; newFinishDate: string; message: string }>(
+      `/projects/${projectId}/simulate/apply`, req || {}
+    ).then(r => r.data),
 };
 
 // ── Intelligent Resource Leveling Suite ───────────────────────────────────────
@@ -619,5 +623,6 @@ export const reportApi = {
 };
 
 export default api;
+
 
 

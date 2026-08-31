@@ -4,6 +4,9 @@ import TaskForm from '../components/TaskForm';
 import TaskCard from '../components/TaskCard';
 import { projectApi, taskApi, teamApi, Project, Task, TaskInput, TaskPriority, TaskStatus, TeamMember } from '../services/api';
 import LogoLoader from '../components/LogoLoader';
+import { WhatIfSimulatorModal } from '../components/WhatIfSimulatorModal';
+import { Zap } from 'lucide-react';
+
 export default function ProjectDetail() {
   const { id } = useParams();
   const projectId = Number(id);
@@ -14,6 +17,7 @@ export default function ProjectDetail() {
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
+  const [isSimulatorOpen, setIsSimulatorOpen] = useState(false);
 
   const load = () => 
     Promise.all([projectApi.get(projectId), taskApi.list(projectId), teamApi.list(projectId).catch(() => [])])
@@ -58,10 +62,10 @@ export default function ProjectDetail() {
     }
   };
 
-  const changeProgress = async (taskId: number, progress: number) => {
+  const changeProgress = async (taskId: number, prog: number) => {
     setActionError('');
     try {
-      await taskApi.progress(taskId, progress);
+      await taskApi.progress(taskId, prog);
       load();
     } catch (err: any) {
       setActionError(err.response?.data?.message || 'Could not update task progress.');
@@ -69,20 +73,17 @@ export default function ProjectDetail() {
   };
 
   const removeTask = async (taskId: number) => {
-    if (confirm('Are you sure you want to delete this task?')) {
-      setActionError('');
-      try {
-        await taskApi.remove(taskId);
-        load();
-      } catch (err: any) {
-        setActionError(err.response?.data?.message || 'Could not delete task.');
-      }
+    setActionError('');
+    try {
+      await taskApi.remove(taskId);
+      load();
+    } catch (err: any) {
+      setActionError(err.response?.data?.message || 'Could not delete task.');
     }
   };
 
   const removeProject = async () => {
-    if (confirm('Are you sure you want to delete this project and all its tasks?')) {
-      setActionError('');
+    if (window.confirm('Are you sure you want to delete this project? All associated tasks, dependencies, and risk logs will be permanently deleted.')) {
       try {
         await projectApi.remove(projectId);
         navigate('/projects');
@@ -94,6 +95,17 @@ export default function ProjectDetail() {
 
   return (
     <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
+      {/* What-If Simulator Modal */}
+      {project && (
+        <WhatIfSimulatorModal
+          projectId={projectId}
+          projectName={project.name}
+          isOpen={isSimulatorOpen}
+          onClose={() => setIsSimulatorOpen(false)}
+          onApplied={load}
+        />
+      )}
+
       <Link to="/projects" style={{ color: 'var(--primary-light)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.9rem', marginBottom: 16, fontWeight: 500 }}>
         ← Back to Projects
       </Link>
@@ -116,7 +128,19 @@ export default function ProjectDetail() {
                   {project.description || 'No project description provided.'}
                 </p>
               </div>
-              <div style={{ display: 'flex', gap: 10 }}>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => setIsSimulatorOpen(true)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    padding: '10px 16px', fontSize: '0.9rem', fontWeight: 700,
+                    borderRadius: 'var(--radius-xs)', border: '1px solid rgba(59, 130, 246, 0.4)',
+                    background: 'linear-gradient(135deg, rgba(37, 99, 235, 0.15), rgba(6, 182, 212, 0.1))',
+                    color: '#3b82f6', cursor: 'pointer',
+                  }}
+                >
+                  <Zap size={15} /> 🔮 What-If Simulator
+                </button>
                 <Link
                   to={`/projects/${projectId}/gantt`}
                   className="btn btn-primary"
@@ -153,52 +177,56 @@ export default function ProjectDetail() {
                 <span style={{ color: 'var(--text-muted)' }}>Methodology:</span>{' '}
                 <strong style={{ color: 'var(--primary-light)' }}>{project.methodology || 'CPM / Agile'}</strong>
               </div>
-              {project.budget !== undefined && (
-                <div>
-                  <span style={{ color: 'var(--text-muted)' }}>Budget:</span>{' '}
-                  <strong style={{ color: 'var(--accent-emerald)' }}>${project.budget.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
-                </div>
-              )}
-              {(project.startDate || project.endDate) && (
-                <div>
-                  <span style={{ color: 'var(--text-muted)' }}>Timeline:</span>{' '}
-                  <strong style={{ color: 'var(--secondary)' }}>{project.startDate || '?'} to {project.endDate || '?'}</strong>
-                </div>
-              )}
+              <div>
+                <span style={{ color: 'var(--text-muted)' }}>Start Date:</span>{' '}
+                <strong style={{ color: 'var(--text-primary)' }}>{project.startDate ? new Date(project.startDate).toLocaleDateString() : 'Immediate'}</strong>
+              </div>
+              <div>
+                <span style={{ color: 'var(--text-muted)' }}>Target Deadline:</span>{' '}
+                <strong style={{ color: 'var(--text-primary)' }}>{project.endDate ? new Date(project.endDate).toLocaleDateString() : 'Open-ended'}</strong>
+              </div>
+              <div>
+                <span style={{ color: 'var(--text-muted)' }}>Total Tasks:</span>{' '}
+                <strong style={{ color: 'var(--text-primary)' }}>{tasks.length}</strong>
+              </div>
             </div>
           </div>
 
-          {/* Action Errors Banner */}
           {actionError && (
-            <div className="glass-panel" style={{ padding: '12px 16px', marginBottom: 16, borderColor: '#f87171', backgroundColor: 'rgba(248, 113, 113, 0.05)', color: '#f87171', fontSize: '0.9rem', fontWeight: 500 }}>
-              Error: {actionError}
+            <div className="glass-panel" style={{ padding: 12, marginBottom: 16, borderColor: 'var(--accent-crimson)', color: '#ff7675', fontSize: '0.9rem' }}>
+              {actionError}
             </div>
           )}
 
-          {/* Tasks List Panel */}
-          <div className="glass-panel" style={{ padding: 24 }}>
-            <h3 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: 16 }}>Tasks ({tasks.length})</h3>
+          {/* Create Task Form */}
+          <div style={{ marginBottom: 32 }}>
             <TaskForm onSave={add} />
-            
-            <div style={{ marginTop: 20 }}>
-              {tasks.length === 0 ? (
-                <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem 0' }}>No tasks found in this project. Add one to get started.</p>
-              ) : (
-                tasks.map((t) => (
-                  <TaskCard 
-                    key={t.id} 
-                    task={t} 
-                    projectId={projectId}
-                    teamMembers={teamMembers}
-                    onStatus={(s) => changeStatus(t.id, s)} 
-                    onPriority={(p) => changePriority(t.id, p)}
-                    onProgress={(prog) => changeProgress(t.id, prog)}
-                    onDelete={() => removeTask(t.id)}
-                  />
-                ))
-              )}
-            </div>
           </div>
+
+          {/* Tasks Grid */}
+          <h3 style={{ fontSize: '1.35rem', fontWeight: 700, marginBottom: 16 }}>Project Deliverables &amp; Work Items</h3>
+          {tasks.length === 0 ? (
+            <div className="glass-panel" style={{ padding: '3rem 2rem', textAlign: 'center' }}>
+              <p style={{ color: 'var(--text-muted)', fontSize: '1rem', margin: 0 }}>
+                No tasks created yet for this project. Use the form above to add your first work item or use AI Project Planner!
+              </p>
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>
+              {tasks.map(t => (
+                <TaskCard
+                  key={t.id}
+                  task={t}
+                  projectId={projectId}
+                  teamMembers={teamMembers}
+                  onStatus={(s) => changeStatus(t.id, s)}
+                  onPriority={(p) => changePriority(t.id, p)}
+                  onProgress={(prog) => changeProgress(t.id, prog)}
+                  onDelete={() => removeTask(t.id)}
+                />
+              ))}
+            </div>
+          )}
         </>
       )}
     </div>

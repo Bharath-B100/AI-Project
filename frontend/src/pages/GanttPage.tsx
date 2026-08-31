@@ -195,6 +195,7 @@ export default function GanttPage() {
           projectName={project.name}
           isOpen={isSimulatorOpen}
           onClose={() => setIsSimulatorOpen(false)}
+          onApplied={() => { loadGantt(); loadTasks(); }}
         />
       )}
 

@@ -13,6 +13,7 @@ import com.example.aiprojectmanager.simulation.dto.SimulationRequest;
 import com.example.aiprojectmanager.simulation.dto.SimulationResultDto;
 import com.example.aiprojectmanager.simulation.dto.TaskSimulationOverride;
 import com.example.aiprojectmanager.task.domain.Task;
+import com.example.aiprojectmanager.task.domain.TaskStatus;
 import com.example.aiprojectmanager.task.repository.TaskRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -81,7 +82,6 @@ public class SimulationService {
         // Calibrated Brooks' Law & COCOMO II Scaling
         double speedupFactor = 1.0;
         if (devDelta > 0) {
-            // Non-linear scaling with communication overhead penalty
             double rawBoost = devDelta * 0.22 * prodMultiplier;
             double communicationPenalty = (devDelta * (devDelta - 1)) * 0.015;
             double effectiveBoost = Math.max(0.05, Math.min(rawBoost - communicationPenalty, 0.70));
@@ -272,5 +272,40 @@ public class SimulationService {
                 .simulatedTasks(simulatedGanttItems)
                 .simulatedCriticalPath(simulatedCriticalPath)
                 .build();
+    }
+
+    /**
+     * Applies simulated scenario parameters to actual project tasks in the database.
+     */
+    @Transactional
+    public Map<String, Object> applySimulationScenario(Long projectId, Long ownerId, SimulationRequest request) {
+        SimulationResultDto result = simulateScenario(projectId, ownerId, request);
+        List<Task> liveTasks = taskRepository.findAllByProjectIdOrderByDueDateAsc(projectId);
+
+        Map<Long, Integer> simulatedDurationMap = new HashMap<>();
+        for (GanttTaskItem g : result.getSimulatedTasks()) {
+            simulatedDurationMap.put(g.id(), g.durationDays());
+        }
+
+        int updatedCount = 0;
+        for (Task t : liveTasks) {
+            Integer newDuration = simulatedDurationMap.get(t.getId());
+            if (newDuration != null && !newDuration.equals(t.getDurationDays())) {
+                t.setDurationDays(newDuration);
+                taskRepository.save(t);
+                updatedCount++;
+            }
+        }
+
+        // Recalculate full project schedule after applying
+        schedulingService.calculateSchedule(projectId);
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("applied", true);
+        response.put("updatedTasksCount", updatedCount);
+        response.put("newDurationDays", result.getSimulatedDurationDays());
+        response.put("newFinishDate", result.getSimulatedFinishDate().toString());
+        response.put("message", String.format("Successfully applied simulated scenario: %d task duration(s) updated.", updatedCount));
+        return response;
     }
 }
