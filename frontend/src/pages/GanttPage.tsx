@@ -6,11 +6,11 @@ import DependencyManager from '../components/DependencyManager';
 import CriticalPathView from '../components/CriticalPathView';
 import { WhatIfSimulatorModal } from '../components/WhatIfSimulatorModal';
 import {
-  projectApi, taskApi, dependencyApi, scheduleApi,
-  Project, Task, Dependency, GanttData, CriticalPath,
+  projectApi, taskApi, dependencyApi, scheduleApi, planningApi,
+  Project, Task, Dependency, GanttData, CriticalPath, SuggestedDependency, AutoLevelResponse,
 } from '../services/api';
 import LogoLoader from '../components/LogoLoader';
-import { Zap } from 'lucide-react';
+import { Zap, X } from 'lucide-react';
 
 type Tab = 'gantt' | 'dependencies' | 'critical-path';
 
@@ -41,6 +41,10 @@ export default function GanttPage() {
 
   const [loadingGantt, setLoadingGantt]   = useState(false);
   const [calculating, setCalculating]     = useState(false);
+  const [isLeveling, setIsLeveling]       = useState(false);
+  const [autoLevelResult, setAutoLevelResult] = useState<AutoLevelResponse | null>(null);
+  const [suggestions, setSuggestions]     = useState<SuggestedDependency[] | null>(null);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const [isSimulatorOpen, setIsSimulatorOpen] = useState(false);
   const [selectedTask, setSelectedTask]   = useState<string | null>(null);
   const [error, setError]                 = useState('');
@@ -101,6 +105,50 @@ export default function GanttPage() {
       setError(err.response?.data?.message || 'Schedule calculation failed.');
     } finally {
       setCalculating(false);
+    }
+  };
+
+  const handleAutoLevel = async () => {
+    setIsLeveling(true);
+    setError('');
+    try {
+      const leveled = await scheduleApi.autoLevel(projectId);
+      setAutoLevelResult(leveled);
+      setCalcResult(
+        `⚡ Auto-Leveling complete: ${leveled.resolvedResourceConflicts} bottleneck conflict(s) resolved. Project completion: ${leveled.leveledProjectEnd}.`
+      );
+      await loadGantt();
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Auto-leveling schedule failed.');
+    } finally {
+      setIsLeveling(false);
+    }
+  };
+
+  const handleSuggestDependencies = async () => {
+    setLoadingSuggestions(true);
+    setError('');
+    try {
+      const suggs = await planningApi.suggestDependencies(projectId);
+      setSuggestions(suggs);
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Failed to analyze task dependencies.');
+    } finally {
+      setLoadingSuggestions(false);
+    }
+  };
+
+  const handleApplySuggestedDep = async (s: SuggestedDependency) => {
+    try {
+      await dependencyApi.create(projectId, s.successorTaskId, {
+        predecessorTaskId: s.predecessorTaskId,
+        dependencyType: 'FINISH_TO_START',
+        lagDays: 0,
+      });
+      setSuggestions(prev => prev ? prev.filter(x => !(x.predecessorTaskId === s.predecessorTaskId && x.successorTaskId === s.successorTaskId)) : null);
+      await handleDepsChanged();
+    } catch (err: any) {
+      alert(err.response?.data?.message || 'Failed to create dependency.');
     }
   };
 
@@ -179,7 +227,33 @@ export default function GanttPage() {
                 : 'Calculate schedule to generate Gantt chart and critical path analysis.'}
             </p>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <button
+              onClick={handleAutoLevel}
+              disabled={isLeveling}
+              style={{
+                fontSize: '0.88rem', padding: '10px 18px', borderRadius: 'var(--radius-sm)',
+                background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff',
+                border: 'none', fontWeight: 700, cursor: isLeveling ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 7,
+                boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)',
+              }}
+              title="Resolve resource bottlenecks and auto-stagger concurrent tasks"
+            >
+              <Zap size={15} /> {isLeveling ? 'Leveling…' : '⚡ AI Auto-Level'}
+            </button>
+            <button
+              onClick={handleSuggestDependencies}
+              disabled={loadingSuggestions}
+              style={{
+                fontSize: '0.88rem', padding: '10px 18px', borderRadius: 'var(--radius-sm)',
+                background: 'linear-gradient(135deg, #8b5cf6, #6366f1)', color: '#fff',
+                border: 'none', fontWeight: 700, cursor: loadingSuggestions ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 7,
+                boxShadow: '0 4px 12px rgba(139, 92, 246, 0.3)',
+              }}
+              title="Infer missing dependencies using AI heuristics"
+            >
+              <span>🤖</span> {loadingSuggestions ? 'Analyzing…' : 'AI Suggest Links'}
+            </button>
             <button
               onClick={() => setIsSimulatorOpen(true)}
               style={{
@@ -323,6 +397,103 @@ export default function GanttPage() {
           />
         )}
       </div>
+
+      {/* ── AI Suggested Dependencies Modal ── */}
+      {suggestions && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div style={{ background: 'var(--bg-card)', borderRadius: 14, width: '100%', maxWidth: 680, maxHeight: '85vh', overflow: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,0.4)', border: '1px solid var(--border-medium)' }}>
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'linear-gradient(135deg, #8b5cf6, #6366f1)', color: '#fff', borderRadius: '14px 14px 0 0' }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800 }}>🤖 AI Recommended Task Dependencies</h3>
+                <p style={{ margin: '2px 0 0', fontSize: '0.78rem', color: 'rgba(255,255,255,0.8)' }}>
+                  Inferred from task titles, phase sequences, and architectural prerequisites
+                </p>
+              </div>
+              <button onClick={() => setSuggestions(null)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: 6, color: '#fff', padding: 6, cursor: 'pointer' }}>
+                <X size={16} />
+              </button>
+            </div>
+            <div style={{ padding: '16px 20px' }}>
+              {suggestions.length === 0 ? (
+                <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                  ✅ No new missing dependencies detected. Your project network is already well linked!
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {suggestions.map((s, i) => (
+                    <div key={i} style={{ padding: '12px 14px', borderRadius: 8, background: 'var(--bg-secondary)', border: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span>{s.predecessorTitle}</span>
+                          <span style={{ color: '#6366f1', fontSize: '0.75rem', fontWeight: 800 }}>➔ Finish-to-Start ➔</span>
+                          <span>{s.successorTitle}</span>
+                        </div>
+                        <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: 4 }}>{s.rationale}</div>
+                        <div style={{ fontSize: '0.7rem', color: '#059669', fontWeight: 700, marginTop: 2 }}>Confidence: {(s.confidenceScore * 100).toFixed(0)}%</div>
+                      </div>
+                      <button
+                        onClick={() => handleApplySuggestedDep(s)}
+                        style={{
+                          padding: '6px 14px', borderRadius: 6, border: 'none',
+                          background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff',
+                          fontWeight: 700, fontSize: '0.78rem', cursor: 'pointer', flexShrink: 0,
+                        }}
+                      >
+                        + Add Link
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Auto-Leveling Results Dialog ── */}
+      {autoLevelResult && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div style={{ background: 'var(--bg-card)', borderRadius: 14, width: '100%', maxWidth: 640, maxHeight: '85vh', overflow: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,0.4)', border: '1px solid var(--border-medium)' }}>
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', borderRadius: '14px 14px 0 0' }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800 }}>⚡ Resource-Constrained Auto-Leveling</h3>
+                <p style={{ margin: '2px 0 0', fontSize: '0.78rem', color: 'rgba(255,255,255,0.8)' }}>
+                  Optimized timeline with concurrent bottleneck resolution
+                </p>
+              </div>
+              <button onClick={() => setAutoLevelResult(null)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: 6, color: '#fff', padding: 6, cursor: 'pointer' }}>
+                <X size={16} />
+              </button>
+            </div>
+            <div style={{ padding: '18px 20px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 16 }}>
+                <div style={{ background: 'var(--bg-secondary)', padding: '10px', borderRadius: 8, textAlign: 'center' }}>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#6366f1' }}>{autoLevelResult.resolvedResourceConflicts}</div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Bottlenecks Resolved</div>
+                </div>
+                <div style={{ background: 'var(--bg-secondary)', padding: '10px', borderRadius: 8, textAlign: 'center' }}>
+                  <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary)' }}>{autoLevelResult.leveledProjectEnd}</div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Leveled Completion</div>
+                </div>
+                <div style={{ background: 'var(--bg-secondary)', padding: '10px', borderRadius: 8, textAlign: 'center' }}>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 800, color: autoLevelResult.delayOrSavedDays <= 0 ? '#059669' : '#ea580c' }}>
+                    {autoLevelResult.delayOrSavedDays > 0 ? `+${autoLevelResult.delayOrSavedDays}d` : `${autoLevelResult.delayOrSavedDays}d`}
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Schedule Shift</div>
+                </div>
+              </div>
+              <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 8 }}>📋 Leveling Adjustment Log:</div>
+              <div style={{ background: 'var(--bg-secondary)', padding: '12px 14px', borderRadius: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {autoLevelResult.levelingLog.map((log, i) => (
+                  <div key={i} style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                    {log}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

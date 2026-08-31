@@ -1,8 +1,6 @@
 package com.example.aiprojectmanager.planning.controller;
 
-import com.example.aiprojectmanager.planning.dto.CommitPlanRequest;
-import com.example.aiprojectmanager.planning.dto.GeneratedPlanDto;
-import com.example.aiprojectmanager.planning.dto.PlanGenerationRequest;
+import com.example.aiprojectmanager.planning.dto.*;
 import com.example.aiprojectmanager.planning.service.AiProjectPlannerService;
 import com.example.aiprojectmanager.user.domain.User;
 import com.example.aiprojectmanager.user.repository.UserRepository;
@@ -14,6 +12,7 @@ import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -38,6 +37,26 @@ public class AiPlanningController {
     public ResponseEntity<GeneratedPlanDto> generatePlan(@Valid @RequestBody PlanGenerationRequest request) {
         GeneratedPlanDto plan = plannerService.generatePlan(request);
         return ResponseEntity.ok(plan);
+    }
+
+    /**
+     * POST /api/v1/planning/refine
+     * Refines an existing generated plan based on conversational user instruction.
+     */
+    @PostMapping("/refine")
+    public ResponseEntity<GeneratedPlanDto> refinePlan(@Valid @RequestBody PlanRefinementRequest request) {
+        GeneratedPlanDto refined = plannerService.refinePlan(request);
+        return ResponseEntity.ok(refined);
+    }
+
+    /**
+     * GET /api/v1/planning/suggest-dependencies/{projectId}
+     * Inspects existing project tasks and returns AI-recommended dependency links.
+     */
+    @GetMapping("/suggest-dependencies/{projectId}")
+    public ResponseEntity<List<SuggestedDependencyDto>> suggestDependencies(@PathVariable Long projectId) {
+        List<SuggestedDependencyDto> suggestions = plannerService.suggestDependencies(projectId);
+        return ResponseEntity.ok(suggestions);
     }
 
     /**

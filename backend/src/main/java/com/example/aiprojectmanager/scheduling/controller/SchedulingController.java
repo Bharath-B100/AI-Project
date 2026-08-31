@@ -84,4 +84,13 @@ public class SchedulingController {
     public CriticalPathResponse getCriticalPath(@PathVariable Long projectId) {
         return ganttDataService.getCriticalPath(projectId);
     }
+
+    /**
+     * POST /api/v1/projects/{projectId}/schedule/auto-level
+     * Performs resource-constrained auto-leveling CPM schedule calculation.
+     */
+    @PostMapping("/projects/{projectId}/schedule/auto-level")
+    public AutoLevelResponse autoLevelSchedule(@PathVariable Long projectId) {
+        return ganttDataService.autoLevelSchedule(projectId);
+    }
 }

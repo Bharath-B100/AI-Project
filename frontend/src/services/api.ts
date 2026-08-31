@@ -162,9 +162,23 @@ export const dependencyApi = {
     api.delete(`/projects/${projectId}/dependencies/${dependencyId}`),
 };
 
+export interface AutoLevelResponse {
+  projectId: number;
+  totalTasks: number;
+  leveledTasks: number;
+  resolvedResourceConflicts: number;
+  originalProjectEnd: string;
+  leveledProjectEnd: string;
+  delayOrSavedDays: number;
+  tasks: GanttTask[];
+  levelingLog: string[];
+}
+
 export const scheduleApi = {
   calculate: (projectId: number) =>
     api.post<ScheduleCalculation>(`/projects/${projectId}/schedule/calculate`).then((r) => r.data),
+  autoLevel: (projectId: number) =>
+    api.post<AutoLevelResponse>(`/projects/${projectId}/schedule/auto-level`).then((r) => r.data),
   getGantt: (projectId: number) =>
     api.get<GanttData>(`/projects/${projectId}/gantt`).then((r) => r.data),
   getCriticalPath: (projectId: number) =>
@@ -381,9 +395,26 @@ export interface CommitPlanResult {
   schedule?: any;
 }
 
+export interface SuggestedDependency {
+  predecessorTaskId: number;
+  predecessorTitle: string;
+  successorTaskId: number;
+  successorTitle: string;
+  dependencyType: string;
+  rationale: string;
+  confidenceScore: number;
+}
+
+export interface PlanRefinementRequest {
+  instruction: string;
+  currentPlan: GeneratedPlan;
+}
+
 export const planningApi = {
-  generatePlan: (req: PlanGenerationRequest) => api.post<GeneratedPlan>('/planning/generate', req).then(r => r.data),
-  commitPlan:   (req: CommitPlanRequest)   => api.post<CommitPlanResult>('/planning/commit', req).then(r => r.data),
+  generatePlan:        (req: PlanGenerationRequest) => api.post<GeneratedPlan>('/planning/generate', req).then(r => r.data),
+  refinePlan:          (req: PlanRefinementRequest) => api.post<GeneratedPlan>('/planning/refine', req).then(r => r.data),
+  suggestDependencies: (projectId: number)          => api.get<SuggestedDependency[]>(`/planning/suggest-dependencies/${projectId}`).then(r => r.data),
+  commitPlan:          (req: CommitPlanRequest)   => api.post<CommitPlanResult>('/planning/commit', req).then(r => r.data),
 };
 
 // ── What-If Scenario Simulation Suite ─────────────────────────────────────────

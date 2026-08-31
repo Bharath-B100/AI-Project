@@ -150,6 +150,12 @@ public class GanttDataService {
         return schedulingService.getCriticalPath(projectId);
     }
 
+    /** Auto-levels the schedule to resolve resource congestion. */
+    public AutoLevelResponse autoLevelSchedule(Long projectId) {
+        ownedProject(projectId);
+        return schedulingService.autoLevelSchedule(projectId);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private Project ownedProject(Long projectId) {

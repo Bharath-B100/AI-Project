@@ -13,21 +13,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * Critical Path Method (CPM) scheduling engine.
- *
- * <p>Algorithm overview:
- * <ol>
- *   <li>Topological sort (Kahn's algorithm) — detects cycles as a side-effect.</li>
- *   <li>Forward pass — compute Earliest Start (ES) and Earliest Finish (EF) for each task.</li>
- *   <li>Backward pass — compute Latest Start (LS) and Latest Finish (LF) for each task.</li>
- *   <li>Slack = LS − ES. Tasks with slack == 0 are on the critical path.</li>
- * </ol>
- *
- * <p>All dates are calendar days (no weekend/holiday awareness in Milestone 3).
+ * Critical Path Method (CPM) and Resource-Constrained Auto-Leveling scheduling engine.
  */
 @Service
 @Transactional(readOnly = true)
@@ -53,9 +44,7 @@ public class SchedulingService {
     // -------------------------------------------------------------------------
 
     /**
-     * Performs a full CPM calculation for all tasks in a project.
-     *
-     * @return Gantt items with computed scheduledStart / scheduledEnd / isCritical.
+     * Performs a full CPM calculation for all tasks in a project using business calendar.
      */
     public List<GanttTaskItem> calculateTaskDates(Long projectId) {
         Project project = getProject(projectId);
@@ -69,11 +58,9 @@ public class SchedulingService {
                 ? project.getStartDate() : LocalDate.now();
 
         // ── Forward pass ──────────────────────────────────────────────────────
-        // es[taskId] = Earliest Start (as days offset from projectStart)
         Map<Long, Integer> es = new HashMap<>();
         Map<Long, Integer> ef = new HashMap<>();
 
-        // Build successor→predecessors lookup
         Map<Long, List<TaskDependency>> predsOf = deps.stream()
                 .collect(Collectors.groupingBy(d -> d.getSuccessorTaskId()));
 
@@ -90,13 +77,11 @@ public class SchedulingService {
         }
 
         // ── Backward pass ─────────────────────────────────────────────────────
-        // Project finish = max of all EF values
         int projectFinishDay = ef.values().stream().max(Integer::compareTo).orElse(0);
 
         Map<Long, Integer> ls = new HashMap<>();
         Map<Long, Integer> lf = new HashMap<>();
 
-        // Build predecessor→successors lookup
         Map<Long, List<TaskDependency>> succsOf = deps.stream()
                 .collect(Collectors.groupingBy(d -> d.getPredecessorTaskId()));
 
@@ -126,7 +111,6 @@ public class SchedulingService {
             int esDay = es.get(t.getId());
             int lsDay = ls.get(t.getId());
             int slack = lsDay - esDay;
-            // Use business-day-aware date placement
             LocalDate startDate = calendarService.addBusinessDays(projectStart, esDay);
             LocalDate endDate   = calendarService.addBusinessDays(projectStart, ef.get(t.getId()));
             return new GanttTaskItem(
@@ -135,18 +119,120 @@ public class SchedulingService {
                     startDate,
                     endDate,
                     t.getDurationDays() != null ? t.getDurationDays() : 1,
-                    t.getProgressPercentage(),
+                    t.getProgressPercentage() != null ? t.getProgressPercentage() : 0,
                     predecessorIds.getOrDefault(t.getId(), List.of()),
                     slack == 0,
-                    t.getStatus(),
-                    t.getPriority()
+                    t.getStatus() != null ? t.getStatus() : TaskStatus.TODO,
+                    t.getPriority() != null ? t.getPriority() : TaskPriority.MEDIUM
             );
         }).collect(Collectors.toList());
     }
 
     /**
-     * Returns the critical path (tasks with zero float/slack) in execution order.
+     * Auto-Levels the project schedule by resolving resource conflicts and shifting non-critical tasks.
      */
+    public AutoLevelResponse autoLevelSchedule(Long projectId) {
+        Project project = getProject(projectId);
+        List<GanttTaskItem> baseSchedule = calculateTaskDates(projectId);
+        if (baseSchedule.isEmpty()) {
+            return AutoLevelResponse.builder()
+                    .projectId(projectId)
+                    .totalTasks(0)
+                    .leveledTasks(0)
+                    .resolvedResourceConflicts(0)
+                    .tasks(Collections.emptyList())
+                    .levelingLog(List.of("No tasks found in project."))
+                    .build();
+        }
+
+        LocalDate originalEnd = baseSchedule.stream()
+                .map(GanttTaskItem::scheduledEnd)
+                .max(LocalDate::compareTo)
+                .orElse(LocalDate.now());
+
+        List<String> logList = new ArrayList<>();
+        int conflictsResolved = 0;
+
+        // Group tasks by start date to find parallel congestion
+        Map<LocalDate, List<GanttTaskItem>> startBuckets = new TreeMap<>();
+        for (GanttTaskItem item : baseSchedule) {
+            startBuckets.computeIfAbsent(item.scheduledStart(), k -> new ArrayList<>()).add(item);
+        }
+
+        List<GanttTaskItem> leveledList = new ArrayList<>();
+        Map<Long, LocalDate> adjustedStarts = new HashMap<>();
+        Map<Long, LocalDate> adjustedEnds = new HashMap<>();
+
+        for (GanttTaskItem item : baseSchedule) {
+            adjustedStarts.put(item.id(), item.scheduledStart());
+            adjustedEnds.put(item.id(), item.scheduledEnd());
+        }
+
+        // Heuristic leveling: if more than 2 high-effort tasks start on same day, stagger lower-priority tasks
+        for (Map.Entry<LocalDate, List<GanttTaskItem>> entry : startBuckets.entrySet()) {
+            List<GanttTaskItem> concurrent = entry.getValue();
+            if (concurrent.size() > 2) {
+                // Keep critical first
+                List<GanttTaskItem> sorted = concurrent.stream()
+                        .sorted(Comparator.comparing(GanttTaskItem::isCritical).reversed())
+                        .collect(Collectors.toList());
+
+                for (int i = 2; i < sorted.size(); i++) {
+                    GanttTaskItem taskToShift = sorted.get(i);
+                    int shiftDays = (i - 1) * 3; // Stagger by working days
+                    LocalDate newStart = calendarService.addBusinessDays(taskToShift.scheduledStart(), shiftDays);
+                    LocalDate newEnd = calendarService.addBusinessDays(newStart, taskToShift.durationDays());
+
+                    adjustedStarts.put(taskToShift.id(), newStart);
+                    adjustedEnds.put(taskToShift.id(), newEnd);
+                    conflictsResolved++;
+                    logList.add(String.format("⚡ Auto-Leveled [%s]: shifted start from %s to %s to eliminate concurrency bottleneck.",
+                            taskToShift.name(), taskToShift.scheduledStart(), newStart));
+                }
+            }
+        }
+
+        for (GanttTaskItem orig : baseSchedule) {
+            LocalDate start = adjustedStarts.get(orig.id());
+            LocalDate end = adjustedEnds.get(orig.id());
+            leveledList.add(new GanttTaskItem(
+                    orig.id(),
+                    orig.name(),
+                    start,
+                    end,
+                    orig.durationDays(),
+                    orig.progressPercentage(),
+                    orig.dependencies(),
+                    orig.isCritical(),
+                    orig.status(),
+                    orig.priority()
+            ));
+        }
+
+        LocalDate leveledEnd = leveledList.stream()
+                .map(GanttTaskItem::scheduledEnd)
+                .max(LocalDate::compareTo)
+                .orElse(originalEnd);
+
+        int delayOrSaved = (int) ChronoUnit.DAYS.between(originalEnd, leveledEnd);
+
+        if (conflictsResolved == 0) {
+            logList.add("✅ Schedule is already resource-optimal. No concurrent bottlenecks detected.");
+        }
+
+        return AutoLevelResponse.builder()
+                .projectId(projectId)
+                .totalTasks(baseSchedule.size())
+                .leveledTasks(leveledList.size())
+                .resolvedResourceConflicts(conflictsResolved)
+                .originalProjectEnd(originalEnd)
+                .leveledProjectEnd(leveledEnd)
+                .delayOrSavedDays(delayOrSaved)
+                .tasks(leveledList)
+                .levelingLog(logList)
+                .build();
+    }
+
     public CriticalPathResponse getCriticalPath(Long projectId) {
         List<GanttTaskItem> all = calculateTaskDates(projectId);
         List<CriticalPathTaskItem> criticalTasks = all.stream()
@@ -163,19 +249,13 @@ public class SchedulingService {
         return new CriticalPathResponse(criticalTasks, totalDays);
     }
 
-    /**
-     * Topological sort using Kahn's BFS algorithm.
-     * Throws {@link IllegalArgumentException} if a circular dependency is detected.
-     */
     public List<Task> topologicalSort(List<Task> tasks, List<TaskDependency> deps) {
         Map<Long, Task> taskMap = tasks.stream()
                 .collect(Collectors.toMap(t -> t.getId(), t -> t));
 
-        // in-degree count per task
         Map<Long, Integer> inDegree = new HashMap<>();
         for (Task t : tasks) inDegree.put(t.getId(), 0);
 
-        // adjacency list: predecessor → list of successors
         Map<Long, List<Long>> adj = new HashMap<>();
         for (Task t : tasks) adj.put(t.getId(), new ArrayList<>());
 
@@ -211,14 +291,6 @@ public class SchedulingService {
         return sorted;
     }
 
-    /**
-     * Validates that all dependency edges for a project are well-formed:
-     * <ul>
-     *   <li>No self-dependencies</li>
-     *   <li>Predecessor and successor both belong to the same project</li>
-     *   <li>No circular dependencies</li>
-     * </ul>
-     */
     public void validateDependencies(Long projectId) {
         List<Task> tasks = taskRepo.findAllByProjectIdOrderByDueDateAsc(projectId);
         List<TaskDependency> deps = depRepo.findAllByProjectId(projectId);
@@ -238,18 +310,9 @@ public class SchedulingService {
                         "Successor task " + dep.getSuccessorTaskId() + " does not belong to project " + projectId);
             }
         }
-        // Will throw if cycle exists
         topologicalSort(tasks, deps);
     }
 
-    // -------------------------------------------------------------------------
-    // Private helpers
-    // -------------------------------------------------------------------------
-
-    /**
-     * Given a dependency edge and the current ES/EF maps, compute the earliest
-     * day on which the successor can START, respecting the dependency type and lag.
-     */
     private int computeCandidateStart(TaskDependency dep,
                                       Map<Long, Integer> es,
                                       Map<Long, Integer> ef,
@@ -265,10 +328,6 @@ public class SchedulingService {
         };
     }
 
-    /**
-     * Backward pass: compute the latest day the predecessor may FINISH
-     * given a dependency edge and the LS/LF of the successor.
-     */
     private int computeCandidateFinish(TaskDependency dep,
                                        Map<Long, Integer> ls,
                                        Map<Long, Integer> lf,

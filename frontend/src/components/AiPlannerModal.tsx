@@ -57,6 +57,8 @@ export const AiPlannerModal: React.FC<AiPlannerModalProps> = ({ isOpen, onClose,
   // Flow & Plan state
   const [step, setStep]               = useState<'PROMPT' | 'REVIEW'>('PROMPT');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isRefining, setIsRefining] = useState(false);
+  const [refineInstruction, setRefineInstruction] = useState('');
   const [isCommitting, setIsCommitting] = useState(false);
   const [error, setError]             = useState<string | null>(null);
   const [plan, setPlan]               = useState<GeneratedPlan | null>(null);
@@ -99,6 +101,25 @@ export const AiPlannerModal: React.FC<AiPlannerModalProps> = ({ isOpen, onClose,
       setError(err.response?.data?.message || 'Failed to generate AI project plan. Please try again.');
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const handleRefine = async () => {
+    if (!plan || !refineInstruction.trim()) return;
+    setIsRefining(true);
+    setError(null);
+    try {
+      const refined = await planningApi.refinePlan({
+        instruction: refineInstruction.trim(),
+        currentPlan: plan,
+      });
+      setPlan(refined);
+      setEditName(refined.projectName);
+      setRefineInstruction('');
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Failed to refine plan with AI.');
+    } finally {
+      setIsRefining(false);
     }
   };
 
@@ -456,6 +477,40 @@ export const AiPlannerModal: React.FC<AiPlannerModalProps> = ({ isOpen, onClose,
                       })}
                     </tbody>
                   </table>
+                </div>
+              </div>
+
+              {/* AI Plan Refinement Input */}
+              <div style={{
+                marginBottom: '1.5rem', padding: '14px 16px', borderRadius: 'var(--radius-sm)',
+                background: 'var(--bg-secondary)', border: '1px solid var(--border-light)',
+              }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 8 }}>
+                  <Sparkles size={14} style={{ color: '#6366f1' }} />
+                  Refine with AI Instructions (Optional)
+                </label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input
+                    placeholder="e.g. Add automated QA testing, reduce timeline by 20%, or add compliance security audit..."
+                    value={refineInstruction}
+                    onChange={e => setRefineInstruction(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleRefine(); } }}
+                    style={{ flex: 1, padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border-medium)', background: 'var(--bg-card)', color: 'var(--text-primary)', fontSize: '0.85rem' }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleRefine}
+                    disabled={isRefining || !refineInstruction.trim()}
+                    style={{
+                      padding: '8px 16px', borderRadius: 6, border: 'none',
+                      background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', color: '#fff',
+                      fontWeight: 700, fontSize: '0.82rem', cursor: isRefining || !refineInstruction.trim() ? 'not-allowed' : 'pointer',
+                      display: 'flex', alignItems: 'center', gap: 6, opacity: isRefining || !refineInstruction.trim() ? 0.6 : 1,
+                    }}
+                  >
+                    {isRefining ? <RefreshCw size={13} className="spin" /> : <Sparkles size={13} />}
+                    {isRefining ? 'Refining…' : 'Apply AI Refinement'}
+                  </button>
                 </div>
               </div>
 
