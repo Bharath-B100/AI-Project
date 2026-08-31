@@ -35,6 +35,8 @@ class SchedulingServiceTest {
     @Mock private TaskDependencyRepository depRepo;
     @Mock private ProjectRepository projectRepo;
     @Mock private BusinessCalendarService calendarService;
+    @Mock private TaskAssignmentRepository taskAssignmentRepo;
+    @Mock private TeamMemberRepository teamMemberRepo;
 
     @InjectMocks
     private SchedulingService service;

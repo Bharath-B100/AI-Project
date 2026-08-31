@@ -1,5 +1,7 @@
 package com.example.aiprojectmanager.scheduling.service;
 
+import com.example.aiprojectmanager.assignment.domain.TaskAssignment;
+import com.example.aiprojectmanager.assignment.repository.TaskAssignmentRepository;
 import com.example.aiprojectmanager.scheduling.domain.TaskDependency;
 import com.example.aiprojectmanager.scheduling.dto.*;
 import com.example.aiprojectmanager.scheduling.repository.TaskDependencyRepository;
@@ -8,6 +10,8 @@ import com.example.aiprojectmanager.task.domain.DependencyType;
 import com.example.aiprojectmanager.task.domain.TaskStatus;
 import com.example.aiprojectmanager.task.domain.TaskPriority;
 import com.example.aiprojectmanager.task.repository.TaskRepository;
+import com.example.aiprojectmanager.team.domain.TeamMember;
+import com.example.aiprojectmanager.team.repository.TeamMemberRepository;
 import com.example.aiprojectmanager.project.domain.Project;
 import com.example.aiprojectmanager.project.repository.ProjectRepository;
 import com.example.aiprojectmanager.common.NotFoundException;
@@ -30,15 +34,21 @@ public class SchedulingService {
     private final TaskDependencyRepository depRepo;
     private final ProjectRepository projectRepo;
     private final BusinessCalendarService calendarService;
+    private final TaskAssignmentRepository taskAssignmentRepo;
+    private final TeamMemberRepository teamMemberRepo;
 
     public SchedulingService(TaskRepository taskRepo,
                              TaskDependencyRepository depRepo,
                              ProjectRepository projectRepo,
-                             BusinessCalendarService calendarService) {
+                             BusinessCalendarService calendarService,
+                             TaskAssignmentRepository taskAssignmentRepo,
+                             TeamMemberRepository teamMemberRepo) {
         this.taskRepo = taskRepo;
         this.depRepo = depRepo;
         this.projectRepo = projectRepo;
         this.calendarService = calendarService;
+        this.taskAssignmentRepo = taskAssignmentRepo;
+        this.teamMemberRepo = teamMemberRepo;
     }
 
     // -------------------------------------------------------------------------
@@ -48,93 +58,123 @@ public class SchedulingService {
     /**
      * Performs a full CPM calculation for all tasks in a project using business calendar.
      */
-    public List<GanttTaskItem> calculateTaskDates(Long projectId) {
-        Project project = getProject(projectId);
-        List<Task> tasks = taskRepo.findAllByProjectIdOrderByDueDateAsc(projectId);
-        List<TaskDependency> deps = depRepo.findAllByProjectId(projectId);
+    public ScheduleCalculationResponse calculateSchedule(Long projectId) {
+        List<GanttTaskItem> tasks = calculateTaskDates(projectId);
+        List<Long> criticalPath = tasks.stream()
+                .filter(GanttTaskItem::isCritical)
+                .map(GanttTaskItem::id)
+                .collect(Collectors.toList());
 
-        if (tasks.isEmpty()) return Collections.emptyList();
+        int totalDays = tasks.stream()
+                .filter(GanttTaskItem::isCritical)
+                .mapToInt(GanttTaskItem::durationDays)
+                .sum();
 
-        List<Task> ordered = topologicalSort(tasks, deps);
-        LocalDate projectStart = project.getStartDate() != null
-                ? project.getStartDate() : LocalDate.now();
-
-        // ── Forward pass ──────────────────────────────────────────────────────
-        Map<Long, Integer> es = new HashMap<>();
-        Map<Long, Integer> ef = new HashMap<>();
-
-        Map<Long, List<TaskDependency>> predsOf = deps.stream()
-                .collect(Collectors.groupingBy(d -> d.getSuccessorTaskId()));
-
-        for (Task t : ordered) {
-            List<TaskDependency> inEdges = predsOf.getOrDefault(t.getId(), List.of());
-            int startDay = 0;
-            for (TaskDependency dep : inEdges) {
-                int candidateStart = computeCandidateStart(dep, es, ef, t);
-                startDay = Math.max(startDay, candidateStart);
-            }
-            int duration = t.getDurationDays() != null ? t.getDurationDays() : 1;
-            es.put(t.getId(), startDay);
-            ef.put(t.getId(), startDay + duration);
-        }
-
-        // ── Backward pass ─────────────────────────────────────────────────────
-        int projectFinishDay = ef.values().stream().max(Integer::compareTo).orElse(0);
-
-        Map<Long, Integer> ls = new HashMap<>();
-        Map<Long, Integer> lf = new HashMap<>();
-
-        Map<Long, List<TaskDependency>> succsOf = deps.stream()
-                .collect(Collectors.groupingBy(d -> d.getPredecessorTaskId()));
-
-        List<Task> reversed = new ArrayList<>(ordered);
-        Collections.reverse(reversed);
-
-        for (Task t : reversed) {
-            List<TaskDependency> outEdges = succsOf.getOrDefault(t.getId(), List.of());
-            int finishDay = projectFinishDay;
-            for (TaskDependency dep : outEdges) {
-                int candidateFinish = computeCandidateFinish(dep, ls, lf, t);
-                finishDay = Math.min(finishDay, candidateFinish);
-            }
-            int duration = t.getDurationDays() != null ? t.getDurationDays() : 1;
-            lf.put(t.getId(), finishDay);
-            ls.put(t.getId(), finishDay - duration);
-        }
-
-        // ── Build results ─────────────────────────────────────────────────────
-        Map<Long, List<Long>> predecessorIds = deps.stream()
-                .collect(Collectors.groupingBy(
-                        d -> d.getSuccessorTaskId(),
-                        Collectors.mapping(d -> d.getPredecessorTaskId(), Collectors.toList())
-                ));
-
-        return ordered.stream().map(t -> {
-            int esDay = es.get(t.getId());
-            int lsDay = ls.get(t.getId());
-            int slack = lsDay - esDay;
-            LocalDate startDate = calendarService.addBusinessDays(projectStart, esDay);
-            LocalDate endDate   = calendarService.addBusinessDays(projectStart, ef.get(t.getId()));
-            return new GanttTaskItem(
-                    t.getId(),
-                    t.getTitle(),
-                    startDate,
-                    endDate,
-                    t.getDurationDays() != null ? t.getDurationDays() : 1,
-                    t.getProgressPercentage() != null ? t.getProgressPercentage() : 0,
-                    predecessorIds.getOrDefault(t.getId(), List.of()),
-                    slack == 0,
-                    t.getStatus() != null ? t.getStatus() : TaskStatus.TODO,
-                    t.getPriority() != null ? t.getPriority() : TaskPriority.MEDIUM
-            );
-        }).collect(Collectors.toList());
+        return new ScheduleCalculationResponse(tasks, criticalPath, totalDays);
     }
 
     /**
-     * Auto-Levels the project schedule by resolving resource conflicts and shifting non-critical tasks.
+     * Calculates CPM Gantt items with early/late dates, float slack, and critical path.
      */
+    public List<GanttTaskItem> calculateTaskDates(Long projectId) {
+        Project project = projectRepo.findById(projectId)
+                .orElseThrow(() -> new NotFoundException("Project not found: " + projectId));
+
+        LocalDate projectStart = project.getStartDate() != null ? project.getStartDate() : LocalDate.now();
+
+        List<Task> tasks = taskRepo.findAllByProjectIdOrderByDueDateAsc(projectId);
+        if (tasks.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<TaskDependency> dependencies = depRepo.findAllByProjectId(projectId);
+        List<Task> sortedTasks = topologicalSort(tasks, dependencies);
+
+        Map<Long, Integer> es = new HashMap<>();
+        Map<Long, Integer> ef = new HashMap<>();
+        Map<Long, List<TaskDependency>> predsOf = dependencies.stream()
+                .collect(Collectors.groupingBy(TaskDependency::getSuccessorTaskId));
+
+        for (Task task : sortedTasks) {
+            int duration = (task.getDurationDays() != null && task.getDurationDays() > 0)
+                    ? task.getDurationDays() : 1;
+
+            List<TaskDependency> inEdges = predsOf.getOrDefault(task.getId(), Collections.emptyList());
+            int earlyStart = 0;
+            for (TaskDependency dep : inEdges) {
+                int predEf = ef.getOrDefault(dep.getPredecessorTaskId(), 0);
+                int lag = dep.getLagDays() != null ? dep.getLagDays() : 0;
+                earlyStart = Math.max(earlyStart, predEf + lag);
+            }
+            es.put(task.getId(), earlyStart);
+            ef.put(task.getId(), earlyStart + duration);
+        }
+
+        int projectFinish = ef.values().stream().max(Integer::compareTo).orElse(0);
+
+        Map<Long, Integer> ls = new HashMap<>();
+        Map<Long, Integer> lf = new HashMap<>();
+        Map<Long, List<TaskDependency>> succsOf = dependencies.stream()
+                .collect(Collectors.groupingBy(TaskDependency::getPredecessorTaskId));
+
+        List<Task> reverseTasks = new ArrayList<>(sortedTasks);
+        Collections.reverse(reverseTasks);
+
+        for (Task task : reverseTasks) {
+            int duration = (task.getDurationDays() != null && task.getDurationDays() > 0)
+                    ? task.getDurationDays() : 1;
+
+            List<TaskDependency> outEdges = succsOf.getOrDefault(task.getId(), Collections.emptyList());
+            int lateFinish = projectFinish;
+            for (TaskDependency dep : outEdges) {
+                int succLs = ls.getOrDefault(dep.getSuccessorTaskId(), projectFinish);
+                int lag = dep.getLagDays() != null ? dep.getLagDays() : 0;
+                lateFinish = Math.min(lateFinish, succLs - lag);
+            }
+            lf.put(task.getId(), lateFinish);
+            ls.put(task.getId(), lateFinish - duration);
+        }
+
+        List<GanttTaskItem> result = new ArrayList<>();
+        for (Task task : tasks) {
+            int earlyStartOffset = es.getOrDefault(task.getId(), 0);
+            int duration = (task.getDurationDays() != null && task.getDurationDays() > 0)
+                    ? task.getDurationDays() : 1;
+
+            LocalDate start = calendarService.addBusinessDays(projectStart, earlyStartOffset);
+            LocalDate end   = calendarService.addBusinessDays(start, duration);
+
+            int taskLs = ls.getOrDefault(task.getId(), earlyStartOffset);
+            int totalFloat = Math.max(0, taskLs - earlyStartOffset);
+            boolean isCritical = (totalFloat == 0);
+
+            List<Long> predIds = predsOf.getOrDefault(task.getId(), Collections.emptyList())
+                    .stream().map(TaskDependency::getPredecessorTaskId).collect(Collectors.toList());
+
+            result.add(new GanttTaskItem(
+                    task.getId(),
+                    task.getTitle(),
+                    start,
+                    end,
+                    duration,
+                    task.getProgressPercentage() != null ? task.getProgressPercentage() : 0,
+                    predIds,
+                    isCritical,
+                    task.getStatus() != null ? task.getStatus() : TaskStatus.TODO,
+                    task.getPriority() != null ? task.getPriority() : TaskPriority.MEDIUM
+            ));
+        }
+
+        return result;
+    }
+
+    /**
+     * Advanced Resource-Constrained Auto-Leveling (RCPSP)
+     * Detects resource conflicts across assigned team members and team concurrency capacity,
+     * staggers overlapping tasks to eliminate bottlenecks while respecting dependency precedence.
+     */
+    @Transactional
     public AutoLevelResponse autoLevelSchedule(Long projectId) {
-        Project project = getProject(projectId);
         List<GanttTaskItem> baseSchedule = calculateTaskDates(projectId);
         if (baseSchedule.isEmpty()) {
             return AutoLevelResponse.builder()
@@ -152,16 +192,23 @@ public class SchedulingService {
                 .max(LocalDate::compareTo)
                 .orElse(LocalDate.now());
 
+        List<TeamMember> teamMembers = teamMemberRepo.findByProjectId(projectId);
+        List<TaskAssignment> assignments = taskAssignmentRepo.findByProjectId(projectId);
+
+        Map<Long, Long> taskToMember = new HashMap<>();
+        Map<Long, String> memberNames = new HashMap<>();
+        for (TeamMember m : teamMembers) {
+            memberNames.put(m.getId(), m.getName());
+        }
+        for (TaskAssignment ta : assignments) {
+            if (ta.getTask() != null && ta.getTeamMember() != null) {
+                taskToMember.put(ta.getTask().getId(), ta.getTeamMember().getId());
+            }
+        }
+
         List<String> logList = new ArrayList<>();
         int conflictsResolved = 0;
 
-        // Group tasks by start date to find parallel congestion
-        Map<LocalDate, List<GanttTaskItem>> startBuckets = new TreeMap<>();
-        for (GanttTaskItem item : baseSchedule) {
-            startBuckets.computeIfAbsent(item.scheduledStart(), k -> new ArrayList<>()).add(item);
-        }
-
-        List<GanttTaskItem> leveledList = new ArrayList<>();
         Map<Long, LocalDate> adjustedStarts = new HashMap<>();
         Map<Long, LocalDate> adjustedEnds = new HashMap<>();
 
@@ -170,30 +217,75 @@ public class SchedulingService {
             adjustedEnds.put(item.id(), item.scheduledEnd());
         }
 
-        // Heuristic leveling: if more than 2 high-effort tasks start on same day, stagger lower-priority tasks
-        for (Map.Entry<LocalDate, List<GanttTaskItem>> entry : startBuckets.entrySet()) {
-            List<GanttTaskItem> concurrent = entry.getValue();
-            if (concurrent.size() > 2) {
-                // Keep critical first
-                List<GanttTaskItem> sorted = concurrent.stream()
-                        .sorted(Comparator.comparing(GanttTaskItem::isCritical).reversed())
-                        .collect(Collectors.toList());
+        // Sort tasks: Critical tasks first, then by earliest scheduled start, then by priority
+        List<GanttTaskItem> sortedTasks = new ArrayList<>(baseSchedule);
+        sortedTasks.sort((a, b) -> {
+            if (a.isCritical() != b.isCritical()) {
+                return a.isCritical() ? -1 : 1;
+            }
+            int cmpDate = a.scheduledStart().compareTo(b.scheduledStart());
+            if (cmpDate != 0) return cmpDate;
+            return Integer.compare(b.durationDays(), a.durationDays());
+        });
 
-                for (int i = 2; i < sorted.size(); i++) {
-                    GanttTaskItem taskToShift = sorted.get(i);
-                    int shiftDays = (i - 1) * 3; // Stagger by working days
-                    LocalDate newStart = calendarService.addBusinessDays(taskToShift.scheduledStart(), shiftDays);
-                    LocalDate newEnd = calendarService.addBusinessDays(newStart, taskToShift.durationDays());
+        // Track busy windows per team member: MemberId -> List of [Start, End, TaskId]
+        Map<Long, List<LocalDate[]>> memberSchedule = new HashMap<>();
+        // Track overall project concurrency limit (max 2-3 parallel tasks)
+        List<LocalDate[]> projectSlots = new ArrayList<>();
 
-                    adjustedStarts.put(taskToShift.id(), newStart);
-                    adjustedEnds.put(taskToShift.id(), newEnd);
-                    conflictsResolved++;
-                    logList.add(String.format("⚡ Auto-Leveled [%s]: shifted start from %s to %s to eliminate concurrency bottleneck.",
-                            taskToShift.name(), taskToShift.scheduledStart(), newStart));
+        for (GanttTaskItem item : sortedTasks) {
+            LocalDate currentStart = adjustedStarts.get(item.id());
+            LocalDate currentEnd = adjustedEnds.get(item.id());
+            Long assignedMemberId = taskToMember.get(item.id());
+
+            // 1. Check direct member conflict
+            boolean shifted = false;
+            if (assignedMemberId != null) {
+                List<LocalDate[]> busyList = memberSchedule.computeIfAbsent(assignedMemberId, k -> new ArrayList<>());
+                for (LocalDate[] busy : busyList) {
+                    // Check if intervals overlap
+                    if (!(currentEnd.isBefore(busy[0]) || currentStart.isAfter(busy[1]))) {
+                        // Resource collision! Shift start to the next working day after busy[1]
+                        LocalDate newStart = calendarService.addBusinessDays(busy[1], 1);
+                        LocalDate newEnd = calendarService.addBusinessDays(newStart, item.durationDays());
+                        adjustedStarts.put(item.id(), newStart);
+                        adjustedEnds.put(item.id(), newEnd);
+                        currentStart = newStart;
+                        currentEnd = newEnd;
+                        conflictsResolved++;
+                        shifted = true;
+                        String memberName = memberNames.getOrDefault(assignedMemberId, "Team Member");
+                        logList.add(String.format("⚡ Auto-Leveled [%s]: Resolved assignment conflict on %s. Shifted start to %s.",
+                                item.name(), memberName, newStart));
+                        break;
+                    }
+                }
+                busyList.add(new LocalDate[]{currentStart, currentEnd});
+            }
+
+            // 2. Check team concurrency bottleneck (if >2 unassigned or general tasks run simultaneously)
+            long overlappingCount = projectSlots.stream()
+                    .filter(slot -> !(currentEnd.isBefore(slot[0]) || currentStart.isAfter(slot[1])))
+                    .count();
+
+            int maxConcurrency = Math.max(2, teamMembers.size() > 0 ? teamMembers.size() : 2);
+            if (overlappingCount >= maxConcurrency && !item.isCritical()) {
+                LocalDate newStart = calendarService.addBusinessDays(currentStart, 2);
+                LocalDate newEnd = calendarService.addBusinessDays(newStart, item.durationDays());
+                adjustedStarts.put(item.id(), newStart);
+                adjustedEnds.put(item.id(), newEnd);
+                currentStart = newStart;
+                currentEnd = newEnd;
+                conflictsResolved++;
+                if (!shifted) {
+                    logList.add(String.format("⚡ Auto-Leveled [%s]: Staggered non-critical task by +2d to relieve team concurrency limit (%d active tasks).",
+                            item.name(), maxConcurrency));
                 }
             }
+            projectSlots.add(new LocalDate[]{currentStart, currentEnd});
         }
 
+        List<GanttTaskItem> leveledList = new ArrayList<>();
         for (GanttTaskItem orig : baseSchedule) {
             LocalDate start = adjustedStarts.get(orig.id());
             LocalDate end = adjustedEnds.get(orig.id());
@@ -219,7 +311,7 @@ public class SchedulingService {
         int delayOrSaved = (int) ChronoUnit.DAYS.between(originalEnd, leveledEnd);
 
         if (conflictsResolved == 0) {
-            logList.add("✅ Schedule is already resource-optimal. No concurrent bottlenecks detected.");
+            logList.add("✅ Schedule is already resource-optimal. All tasks fit within team availability windows.");
         }
 
         return AutoLevelResponse.builder()
@@ -238,115 +330,60 @@ public class SchedulingService {
     public CriticalPathResponse getCriticalPath(Long projectId) {
         List<GanttTaskItem> all = calculateTaskDates(projectId);
         List<CriticalPathTaskItem> criticalTasks = all.stream()
-                .filter(g -> g.isCritical())
+                .filter(GanttTaskItem::isCritical)
                 .map(g -> new CriticalPathTaskItem(
                         g.id(), g.name(), g.durationDays(),
                         g.scheduledStart(), g.scheduledEnd()))
                 .collect(Collectors.toList());
 
         int totalDays = criticalTasks.stream()
-                .mapToInt(c -> c.durationDays())
+                .mapToInt(CriticalPathTaskItem::durationDays)
                 .sum();
 
         return new CriticalPathResponse(criticalTasks, totalDays);
     }
 
-    public List<Task> topologicalSort(List<Task> tasks, List<TaskDependency> deps) {
-        Map<Long, Task> taskMap = tasks.stream()
-                .collect(Collectors.toMap(t -> t.getId(), t -> t));
-
+    public List<Task> topologicalSort(List<Task> tasks, List<TaskDependency> dependencies) {
+        Map<Long, Task> taskMap = tasks.stream().collect(Collectors.toMap(Task::getId, t -> t));
+        Map<Long, List<Long>> graph = new HashMap<>();
         Map<Long, Integer> inDegree = new HashMap<>();
-        for (Task t : tasks) inDegree.put(t.getId(), 0);
 
-        Map<Long, List<Long>> adj = new HashMap<>();
-        for (Task t : tasks) adj.put(t.getId(), new ArrayList<>());
+        for (Task task : tasks) {
+            graph.put(task.getId(), new ArrayList<>());
+            inDegree.put(task.getId(), 0);
+        }
 
-        for (TaskDependency dep : deps) {
-            Long pred = dep.getPredecessorTaskId();
-            Long succ = dep.getSuccessorTaskId();
-            if (taskMap.containsKey(pred) && taskMap.containsKey(succ)) {
-                adj.get(pred).add(succ);
-                inDegree.merge(succ, 1, Integer::sum);
+        for (TaskDependency dep : dependencies) {
+            if (taskMap.containsKey(dep.getPredecessorTaskId()) && taskMap.containsKey(dep.getSuccessorTaskId())) {
+                graph.get(dep.getPredecessorTaskId()).add(dep.getSuccessorTaskId());
+                inDegree.put(dep.getSuccessorTaskId(), inDegree.get(dep.getSuccessorTaskId()) + 1);
             }
         }
 
         Queue<Long> queue = new LinkedList<>();
-        for (Map.Entry<Long, Integer> e : inDegree.entrySet()) {
-            if (e.getValue() == 0) queue.add(e.getKey());
+        for (Map.Entry<Long, Integer> entry : inDegree.entrySet()) {
+            if (entry.getValue() == 0) {
+                queue.add(entry.getKey());
+            }
         }
 
         List<Task> sorted = new ArrayList<>();
         while (!queue.isEmpty()) {
-            Long id = queue.poll();
-            sorted.add(taskMap.get(id));
-            for (Long succ : adj.get(id)) {
-                int deg = inDegree.merge(succ, -1, Integer::sum);
-                if (deg == 0) queue.add(succ);
+            Long current = queue.poll();
+            sorted.add(taskMap.get(current));
+
+            for (Long neighbor : graph.get(current)) {
+                inDegree.put(neighbor, inDegree.get(neighbor) - 1);
+                if (inDegree.get(neighbor) == 0) {
+                    queue.add(neighbor);
+                }
             }
         }
 
         if (sorted.size() != tasks.size()) {
-            throw new IllegalArgumentException(
-                    "Circular dependency detected in project tasks. " +
-                    "Please remove the cycle before calculating the schedule.");
+            throw new IllegalArgumentException("Dependency graph contains a cycle! Cannot perform CPM calculation.");
         }
+
         return sorted;
-    }
-
-    public void validateDependencies(Long projectId) {
-        List<Task> tasks = taskRepo.findAllByProjectIdOrderByDueDateAsc(projectId);
-        List<TaskDependency> deps = depRepo.findAllByProjectId(projectId);
-        Set<Long> taskIds = tasks.stream().map(t -> t.getId()).collect(Collectors.toSet());
-
-        for (TaskDependency dep : deps) {
-            if (dep.getPredecessorTaskId().equals(dep.getSuccessorTaskId())) {
-                throw new IllegalArgumentException(
-                        "Self-dependency detected on task " + dep.getPredecessorTaskId());
-            }
-            if (!taskIds.contains(dep.getPredecessorTaskId())) {
-                throw new IllegalArgumentException(
-                        "Predecessor task " + dep.getPredecessorTaskId() + " does not belong to project " + projectId);
-            }
-            if (!taskIds.contains(dep.getSuccessorTaskId())) {
-                throw new IllegalArgumentException(
-                        "Successor task " + dep.getSuccessorTaskId() + " does not belong to project " + projectId);
-            }
-        }
-        topologicalSort(tasks, deps);
-    }
-
-    private int computeCandidateStart(TaskDependency dep,
-                                      Map<Long, Integer> es,
-                                      Map<Long, Integer> ef,
-                                      Task succ) {
-        Long predId = dep.getPredecessorTaskId();
-        int lag = dep.getLagDays() != null ? dep.getLagDays() : 0;
-        int duration = succ.getDurationDays() != null ? succ.getDurationDays() : 1;
-        return switch (dep.getDependencyType()) {
-            case FINISH_TO_START  -> ef.getOrDefault(predId, 0) + lag;
-            case START_TO_START   -> es.getOrDefault(predId, 0) + lag;
-            case FINISH_TO_FINISH -> ef.getOrDefault(predId, 0) + lag - duration;
-            case START_TO_FINISH  -> es.getOrDefault(predId, 0) + lag - duration;
-        };
-    }
-
-    private int computeCandidateFinish(TaskDependency dep,
-                                       Map<Long, Integer> ls,
-                                       Map<Long, Integer> lf,
-                                       Task pred) {
-        Long succId = dep.getSuccessorTaskId();
-        int lag = dep.getLagDays() != null ? dep.getLagDays() : 0;
-        int duration = pred.getDurationDays() != null ? pred.getDurationDays() : 1;
-        return switch (dep.getDependencyType()) {
-            case FINISH_TO_START  -> ls.get(succId) - lag;
-            case START_TO_START   -> ls.get(succId) - lag + duration;
-            case FINISH_TO_FINISH -> lf.get(succId) - lag;
-            case START_TO_FINISH  -> lf.get(succId) - lag + duration;
-        };
-    }
-
-    private Project getProject(Long projectId) {
-        return projectRepo.findById(projectId)
-                .orElseThrow(() -> new NotFoundException("Project not found: " + projectId));
     }
 }

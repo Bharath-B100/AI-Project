@@ -288,6 +288,32 @@ public class AiProjectPlannerService {
                             .confidenceScore(0.98)
                             .build());
                 }
+                // Heuristic 5: Data Storage / Ingestion -> ETL Pipelines / Analytics
+                else if ((title1.contains("storage") || title1.contains("lakehouse") || title1.contains("ddl") || title1.contains("ingestion") || title1.contains("kafka"))
+                        && (title2.contains("dbt") || title2.contains("pipeline") || title2.contains("transform") || title2.contains("analytics") || title2.contains("dashboard"))) {
+                    suggestions.add(SuggestedDependencyDto.builder()
+                            .predecessorTaskId(t1.getId())
+                            .predecessorTitle(t1.getTitle())
+                            .successorTaskId(t2.getId())
+                            .successorTitle(t2.getTitle())
+                            .dependencyType("FINISH_TO_START")
+                            .rationale("Lakehouse table foundations and ingestion streams must exist before downstream data transformations.")
+                            .confidenceScore(0.94)
+                            .build());
+                }
+                // Heuristic 6: Cloud Infra / VPC -> Application Deployment / CI/CD
+                else if ((title1.contains("vpc") || title1.contains("terraform") || title1.contains("cluster") || title1.contains("eks") || title1.contains("infra"))
+                        && (title2.contains("helm") || title2.contains("deploy") || title2.contains("argocd") || title2.contains("ingress"))) {
+                    suggestions.add(SuggestedDependencyDto.builder()
+                            .predecessorTaskId(t1.getId())
+                            .predecessorTitle(t1.getTitle())
+                            .successorTaskId(t2.getId())
+                            .successorTitle(t2.getTitle())
+                            .dependencyType("FINISH_TO_START")
+                            .rationale("Cloud VPC networks and container clusters must be provisioned before deploying workload manifests.")
+                            .confidenceScore(0.96)
+                            .build());
+                }
             }
         }
 
