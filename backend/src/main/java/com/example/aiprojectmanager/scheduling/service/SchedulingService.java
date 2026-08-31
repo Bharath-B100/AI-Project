@@ -243,9 +243,7 @@ public class SchedulingService {
             if (assignedMemberId != null) {
                 List<LocalDate[]> busyList = memberSchedule.computeIfAbsent(assignedMemberId, k -> new ArrayList<>());
                 for (LocalDate[] busy : busyList) {
-                    // Check if intervals overlap
                     if (!(currentEnd.isBefore(busy[0]) || currentStart.isAfter(busy[1]))) {
-                        // Resource collision! Shift start to the next working day after busy[1]
                         LocalDate newStart = calendarService.addBusinessDays(busy[1], 1);
                         LocalDate newEnd = calendarService.addBusinessDays(newStart, item.durationDays());
                         adjustedStarts.put(item.id(), newStart);
@@ -264,9 +262,12 @@ public class SchedulingService {
             }
 
             // 2. Check team concurrency bottleneck (if >2 unassigned or general tasks run simultaneously)
-            long overlappingCount = projectSlots.stream()
-                    .filter(slot -> !(currentEnd.isBefore(slot[0]) || currentStart.isAfter(slot[1])))
-                    .count();
+            long overlappingCount = 0;
+            for (LocalDate[] slot : projectSlots) {
+                if (!(currentEnd.isBefore(slot[0]) || currentStart.isAfter(slot[1]))) {
+                    overlappingCount++;
+                }
+            }
 
             int maxConcurrency = Math.max(2, teamMembers.size() > 0 ? teamMembers.size() : 2);
             if (overlappingCount >= maxConcurrency && !item.isCritical()) {
