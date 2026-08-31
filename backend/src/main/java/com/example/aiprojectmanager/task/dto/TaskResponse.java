@@ -1,0 +1,2 @@
+package com.example.aiprojectmanager.task.dto; import com.example.aiprojectmanager.task.domain.*; import java.math.BigDecimal; import java.time.*;
+public record TaskResponse(Long id, Long projectId, String title, String description, TaskStatus status, TaskPriority priority, BigDecimal estimatedHours, BigDecimal actualHours, LocalDate startDate, LocalDate dueDate, Integer progressPercentage, LocalDateTime createdAt, LocalDateTime updatedAt) {}

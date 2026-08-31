@@ -1,0 +1,4 @@
+package com.example.aiprojectmanager.user.domain;
+import jakarta.persistence.*; import lombok.*; import java.time.LocalDateTime;
+@Entity @Table(name="users") @Getter @Setter @NoArgsConstructor
+public class User { @Id @GeneratedValue(strategy=GenerationType.IDENTITY) private Long id; @Column(nullable=false) private String name; @Column(nullable=false,unique=true) private String email; @Column(name="password_hash",nullable=false) private String passwordHash; @Column(nullable=false) private String roles="ROLE_USER"; @Column(name="created_at",nullable=false,updatable=false) private LocalDateTime createdAt; @Column(name="updated_at",nullable=false) private LocalDateTime updatedAt; @PrePersist void create(){createdAt=updatedAt=LocalDateTime.now();} @PreUpdate void update(){updatedAt=LocalDateTime.now();} }

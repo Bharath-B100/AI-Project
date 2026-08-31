@@ -1,0 +1,1 @@
+package com.example.aiprojectmanager.task.dto; import com.example.aiprojectmanager.task.domain.TaskStatus; import jakarta.validation.constraints.NotNull; public record TaskStatusRequest(@NotNull TaskStatus status) {}

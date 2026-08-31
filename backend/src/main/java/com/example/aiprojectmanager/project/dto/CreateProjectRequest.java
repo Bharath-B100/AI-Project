@@ -1,0 +1,2 @@
+package com.example.aiprojectmanager.project.dto; import com.example.aiprojectmanager.project.domain.ProjectStatus; import jakarta.validation.constraints.*; import java.math.BigDecimal; import java.time.LocalDate;
+public record CreateProjectRequest(@NotBlank @Size(max=150) String name, @Size(max=2000) String description, LocalDate startDate, LocalDate endDate, @PositiveOrZero BigDecimal budget, @Size(max=80) String methodology, ProjectStatus status) {}

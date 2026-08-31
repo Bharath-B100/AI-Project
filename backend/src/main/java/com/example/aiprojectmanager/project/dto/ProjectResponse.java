@@ -1,0 +1,2 @@
+package com.example.aiprojectmanager.project.dto; import com.example.aiprojectmanager.project.domain.ProjectStatus; import java.math.BigDecimal; import java.time.*;
+public record ProjectResponse(Long id, Long ownerId, String name, String description, LocalDate startDate, LocalDate endDate, BigDecimal budget, String methodology, ProjectStatus status, LocalDateTime createdAt, LocalDateTime updatedAt) {}

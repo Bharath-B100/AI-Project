@@ -1,0 +1,21 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:aipm_db}
+    username: ${DB_USER:aipm_user}
+    password: ${DB_PASSWORD:aipm_password}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  flyway:
+    clean-disabled: false
+
+app:
+  jwt:
+    secret: ${JWT_SECRET:9a4f2c5e7b3d1c8f6e0b4d9a2f1c8e3b5d6c7b9e0f2d4c5a6b8d9e0f1c2a3b4c}
+

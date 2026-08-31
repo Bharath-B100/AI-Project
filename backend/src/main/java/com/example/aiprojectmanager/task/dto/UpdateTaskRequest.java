@@ -1,0 +1,2 @@
+package com.example.aiprojectmanager.task.dto; import com.example.aiprojectmanager.task.domain.*; import jakarta.validation.constraints.*; import java.math.BigDecimal; import java.time.LocalDate;
+public record UpdateTaskRequest(@NotBlank @Size(max=180) String title, @Size(max=2000) String description, @NotNull TaskStatus status, @NotNull TaskPriority priority, @PositiveOrZero BigDecimal estimatedHours, @PositiveOrZero BigDecimal actualHours, LocalDate startDate, LocalDate dueDate, @NotNull @Min(0) @Max(100) Integer progressPercentage) {}

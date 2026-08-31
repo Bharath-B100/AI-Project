@@ -1,0 +1,43 @@
+# Maven & Build Output
+target/
+*.war
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# Embedded JDK & Maven binaries & tools
+backend/jdk21/
+backend/apache-maven-3.9.6/
+backend/*.zip
+backend/*.log
+backend/*.txt
+backend/data/
+
+# Node / Frontend
+node_modules/
+dist/
+dist-ssr/
+*.local
+.eslintcache
+
+# IDE / System
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+*.log
+
+# Environments
+.env
+.env.production
+.env.development
+.env.local
+.env.*.local
+
+# Docker database data
+postgres_data/

@@ -1,0 +1,33 @@
+spring:
+  application:
+    name: ai-project-manager-backend
+  profiles:
+    active: dev
+  jpa:
+    open-in-view: false
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+app:
+  jwt:
+    secret: ${JWT_SECRET:9a4f2c5e7b3d1c8f6e0b4d9a2f1c8e3b5d6c7b9e0f2d4c5a6b8d9e0f1c2a3b4c}
+

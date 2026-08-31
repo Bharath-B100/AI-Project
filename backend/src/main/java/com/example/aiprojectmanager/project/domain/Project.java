@@ -1,0 +1,4 @@
+package com.example.aiprojectmanager.project.domain;
+import jakarta.persistence.*; import lombok.*; import java.math.BigDecimal; import java.time.*;
+@Entity @Table(name="projects") @Getter @Setter @NoArgsConstructor
+public class Project { @Id @GeneratedValue(strategy=GenerationType.IDENTITY) private Long id; @Column(name="owner_id",nullable=false) private Long ownerId; @Column(nullable=false) private String name; @Column(length=2000) private String description; private LocalDate startDate; private LocalDate endDate; private BigDecimal budget; private String methodology; @Enumerated(EnumType.STRING) @Column(nullable=false) private ProjectStatus status=ProjectStatus.DRAFT; @Column(name="created_at",nullable=false,updatable=false) private LocalDateTime createdAt; @Column(name="updated_at",nullable=false) private LocalDateTime updatedAt; @PrePersist void create(){createdAt=updatedAt=LocalDateTime.now();} @PreUpdate void update(){updatedAt=LocalDateTime.now();} }
