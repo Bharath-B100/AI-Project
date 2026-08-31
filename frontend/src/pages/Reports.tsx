@@ -717,8 +717,11 @@ export default function Reports() {
           risks: r.risks.map(x => x.id === riskId ? { ...x, status: updated.status } : x),
         };
       }));
+      setToastMessage(`Risk status updated to ${newStatus}`);
+      setTimeout(() => setToastMessage(null), 3000);
     } catch {
-      alert('Failed to update risk status.');
+      setToastMessage('Failed to update risk status.');
+      setTimeout(() => setToastMessage(null), 4000);
     }
   }, []);
 

@@ -34,12 +34,23 @@ class SchedulingServiceTest {
     @Mock private TaskRepository taskRepo;
     @Mock private TaskDependencyRepository depRepo;
     @Mock private ProjectRepository projectRepo;
+    @Mock private BusinessCalendarService calendarService;
 
     @InjectMocks
     private SchedulingService service;
 
     private static final Long PROJECT_ID = 1L;
     private static final LocalDate PROJECT_START = LocalDate.of(2025, 1, 1);
+
+    @BeforeEach
+    void setUp() {
+        lenient().when(calendarService.addBusinessDays(any(LocalDate.class), anyInt()))
+                .thenAnswer(inv -> {
+                    LocalDate base = inv.getArgument(0);
+                    int days = inv.getArgument(1);
+                    return base.plusDays(days);
+                });
+    }
 
     // ── Helpers ────────────────────────────────────────────────────────────
 
