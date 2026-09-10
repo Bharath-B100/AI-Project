@@ -27,12 +27,11 @@ services:
   # ─────────────────────────────────────────────
   - type: web
     name: aipm-backend
-    runtime: java
+    runtime: docker
     plan: free   # Free tier sleeps after 15 min of inactivity
     region: oregon
     rootDir: backend
-    buildCommand: apache-maven-3.9.6/bin/mvn clean package -DskipTests -B
-    startCommand: java -Dserver.port=$PORT -jar target/ai-project-manager-backend-0.0.1-SNAPSHOT.jar
+    dockerfilePath: Dockerfile
     healthCheckPath: /actuator/health
     envVars:
       # Tell Spring Boot to use the production profile
