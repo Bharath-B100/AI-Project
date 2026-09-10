@@ -1,0 +1,88 @@
+################################################################################
+# render.yaml — Render Blueprint for AI Project Manager
+#
+# This file defines all 3 services in one place:
+#   1. PostgreSQL managed database
+#   2. Spring Boot backend (Java Web Service)
+#   3. React/Vite frontend (Static Site)
+#
+# HOW TO USE:
+#   1. Push this repo to GitHub / GitLab
+#   2. Go to https://dashboard.render.com → "New" → "Blueprint"
+#   3. Connect your repo — Render will auto-detect this file
+#   4. Fill in the secret env vars marked with `sync: false` in the dashboard
+#   5. Click "Apply"
+################################################################################
+
+databases:
+  - name: aipm-postgres
+    databaseName: aipm_db
+    user: aipm_user
+    plan: free   # Upgrade to paid for production workloads
+    region: oregon  # Change to your preferred region (e.g., frankfurt, singapore)
+
+services:
+  # ─────────────────────────────────────────────
+  # Backend: Spring Boot Java Web Service
+  # ─────────────────────────────────────────────
+  - type: web
+    name: aipm-backend
+    runtime: java
+    plan: free   # Free tier sleeps after 15 min of inactivity
+    region: oregon
+    rootDir: backend
+    buildCommand: apache-maven-3.9.6/bin/mvn clean package -DskipTests -B
+    startCommand: java -Dserver.port=$PORT -jar target/ai-project-manager-backend-0.0.1-SNAPSHOT.jar
+    healthCheckPath: /actuator/health
+    envVars:
+      # Tell Spring Boot to use the production profile
+      - key: SPRING_PROFILES_ACTIVE
+        value: prod
+
+      # Render auto-injects the full JDBC URL from the managed DB
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aipm-postgres
+          property: connectionString
+
+      # Auto-generate a cryptographically secure JWT secret
+      - key: JWT_SECRET
+        generateValue: true
+
+      # Token expiry: 24 hours (ms). Adjust as needed.
+      - key: JWT_EXPIRATION_MS
+        value: "86400000"
+
+      # CORS: allow requests from the frontend static site
+      # After deploying, replace with your actual frontend URL
+      - key: ALLOWED_ORIGINS
+        value: https://aipm-frontend.onrender.com
+
+      # ── LLM Config (fill in the dashboard — do NOT commit your key) ──
+      - key: LLM_PROVIDER
+        value: openai
+      - key: LLM_MODEL
+        value: gpt-4o
+      - key: LLM_API_KEY
+        sync: false   # Secret — you enter this manually on Render dashboard
+
+  # ─────────────────────────────────────────────
+  # Frontend: React/Vite Static Site
+  # ─────────────────────────────────────────────
+  - type: web
+    name: aipm-frontend
+    runtime: static
+    plan: free
+    region: oregon
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      # The backend URL — must match the aipm-backend service URL on Render
+      - key: VITE_API_BASE_URL
+        value: https://aipm-backend.onrender.com
+    routes:
+      # React Router: serve index.html for all routes (SPA fallback)
+      - type: rewrite
+        source: /*
+        destination: /index.html

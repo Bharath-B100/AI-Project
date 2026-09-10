@@ -1,0 +1,29 @@
+spring:
+  datasource:
+    # Render provides DATABASE_URL as a full PostgreSQL JDBC connection string
+    url: ${DATABASE_URL}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  flyway:
+    # Never run flyway:clean in production!
+    clean-disabled: true
+
+app:
+  jwt:
+    secret: ${JWT_SECRET}
+    expiration-ms: ${JWT_EXPIRATION_MS:86400000}
+
+# Reduce logging verbosity in production
+logging:
+  level:
+    root: WARN
+    com.example.aiprojectmanager: INFO
+    org.springframework.web: WARN
+    org.springframework.security: WARN

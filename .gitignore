@@ -33,9 +33,8 @@ dist-ssr/
 *.log
 
 # Environments
+# .env.production is intentionally NOT ignored — it only contains public VITE_ build-time vars
 .env
-.env.production
-.env.development
 .env.local
 .env.*.local
 

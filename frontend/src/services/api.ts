@@ -103,7 +103,9 @@ export const registerUnauthorizedCallback = (callback: () => void) => {
 };
 
 const api = axios.create({
-  baseURL: '/api/v1',
+  // In production (Render): VITE_API_BASE_URL is set to the backend service URL
+  // In local dev: falls back to relative '/api/v1' which the Vite proxy forwards to :8080
+  baseURL: (import.meta.env.VITE_API_BASE_URL || '') + '/api/v1',
   headers: {
     'Content-Type': 'application/json',
   },
