@@ -38,11 +38,27 @@ services:
       - key: SPRING_PROFILES_ACTIVE
         value: prod
 
-      # Render auto-injects the full JDBC URL from the managed DB
-      - key: DATABASE_URL
+      # Build a JDBC URL from the managed DB's individual connection fields.
+      - key: DB_HOST
         fromDatabase:
           name: aipm-postgres
-          property: connectionString
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: aipm-postgres
+          property: port
+      - key: DB_NAME
+        fromDatabase:
+          name: aipm-postgres
+          property: database
+      - key: DB_USER
+        fromDatabase:
+          name: aipm-postgres
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: aipm-postgres
+          property: password
 
       # Auto-generate a cryptographically secure JWT secret
       - key: JWT_SECRET
@@ -71,8 +87,6 @@ services:
   - type: web
     name: aipm-frontend
     runtime: static
-    plan: free
-    region: oregon
     rootDir: frontend
     buildCommand: npm ci && npm run build
     staticPublishPath: dist

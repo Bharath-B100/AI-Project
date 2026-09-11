@@ -31,6 +31,5 @@ COPY --from=build /app/target/*.jar app.jar
 # Expose the port (Render injects $PORT at runtime)
 EXPOSE 8080
 
-# Start the app
-ENTRYPOINT ["java", "-Dserver.port=${PORT:-8080}", "-jar", "app.jar"]
-
+# Spring resolves PORT from the environment in application.yml.
+ENTRYPOINT ["java", "-jar", "app.jar"]

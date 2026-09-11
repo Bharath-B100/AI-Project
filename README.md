@@ -121,6 +121,26 @@ npm run build
 
 ---
 
+## Deploying to Render
+
+Use the repository's `render.yaml` Blueprint to create the database, Docker backend, and static frontend. Commit and push local fixes before deploying; Render builds the connected Git branch.
+
+For an existing Blueprint, sync the updated `render.yaml` before redeploying. If you created the backend manually, set `SPRING_PROFILES_ACTIVE=prod` and these environment variables from your Render PostgreSQL database's connection details:
+
+| Variable | Database connection detail |
+| --- | --- |
+| `DB_HOST` | Internal hostname |
+| `DB_PORT` | Port (usually `5432`) |
+| `DB_NAME` | Database name |
+| `DB_USER` | Username |
+| `DB_PASSWORD` | Password |
+
+The backend constructs a JDBC URL from these fields; `DATABASE_URL` is no longer used. Keep the backend and database in the same region. Also set `JWT_SECRET`, `LLM_API_KEY`, and `ALLOWED_ORIGINS` (your actual frontend URL). Set the frontend's `VITE_API_BASE_URL` to your actual backend URL. Spring reads Render's `PORT` automatically and defaults to `8080` locally.
+
+To verify the Docker build's Maven step locally, run `mvn clean package -DskipTests -B` from `backend`. `-DskipTests` skips test execution but still compiles test sources, so missing imports in a test can fail deployment. After deployment, check `/actuator/health` on the backend URL.
+
+---
+
 ## 📂 Project Directory Structure
 
 ```text

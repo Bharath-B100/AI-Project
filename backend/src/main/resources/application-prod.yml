@@ -1,7 +1,9 @@
 spring:
   datasource:
-    # Render provides DATABASE_URL as a full PostgreSQL JDBC connection string
-    url: ${DATABASE_URL}
+    # Render's connectionString is not a JDBC URL; use its individual DB fields.
+    url: jdbc:postgresql://${DB_HOST}:${DB_PORT:5432}/${DB_NAME}
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:

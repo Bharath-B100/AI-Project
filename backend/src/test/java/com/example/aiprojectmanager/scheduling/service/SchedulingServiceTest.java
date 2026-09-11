@@ -10,6 +10,8 @@ import com.example.aiprojectmanager.task.domain.TaskStatus;
 import com.example.aiprojectmanager.task.repository.TaskRepository;
 import com.example.aiprojectmanager.project.domain.Project;
 import com.example.aiprojectmanager.project.repository.ProjectRepository;
+import com.example.aiprojectmanager.assignment.repository.TaskAssignmentRepository;
+import com.example.aiprojectmanager.team.repository.TeamMemberRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -189,7 +191,7 @@ class SchedulingServiceTest {
 
         assertThatThrownBy(() -> service.topologicalSort(tasks, deps))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Circular dependency");
+                .hasMessageContaining("contains a cycle");
     }
 
     @Test
@@ -201,7 +203,7 @@ class SchedulingServiceTest {
 
         assertThatThrownBy(() -> service.topologicalSort(tasks, deps))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Circular dependency");
+                .hasMessageContaining("contains a cycle");
     }
 
     @Test
@@ -256,7 +258,6 @@ class SchedulingServiceTest {
     void testNoTasks() {
         when(projectRepo.findById(PROJECT_ID)).thenReturn(Optional.of(project()));
         when(taskRepo.findAllByProjectIdOrderByDueDateAsc(PROJECT_ID)).thenReturn(Collections.emptyList());
-        when(depRepo.findAllByProjectId(PROJECT_ID)).thenReturn(Collections.emptyList());
 
         List<GanttTaskItem> result = service.calculateTaskDates(PROJECT_ID);
         assertThat(result).isEmpty();
