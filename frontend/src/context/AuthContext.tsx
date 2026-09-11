@@ -33,7 +33,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const [user, setUser] = useState<User | null>(() => {
     const u = localStorage.getItem('user') || sessionStorage.getItem('user');
-    return u ? JSON.parse(u) : null;
+    try {
+      return u && u !== 'undefined' ? JSON.parse(u) : null;
+    } catch (e) {
+      return null;
+    }
   });
 
   const [error,   setError]   = useState<string | null>(null);
